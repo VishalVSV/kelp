@@ -7,7 +7,6 @@ use crossterm::event::Event::Resize;
 use crossterm::event::{Event::{Key,Mouse},KeyModifiers,KeyCode};
 use crossterm::event::read;
 use std::error::Error;
-use std::collections::HashMap;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
@@ -33,17 +32,19 @@ pub struct Editor {
 
     pub open_doc: Option<usize>,
 
-    pub cursor_row: usize,
-    pub cursor_col: usize,
-
     width: usize,
     height: usize,
 
-    line_start: usize
+    line_start: usize,
+    docs_mouse_cache: Vec<(usize,usize)>
 }
 
+#[derive(Default)]
 pub struct Document {
     pub filename: String,
+
+    pub cursor_row: usize,
+    pub cursor_col: usize,
 
     pub rows: Vec<Row>
 }
@@ -58,11 +59,7 @@ pub struct EditorConfig {
 pub struct Row {
     buf: String,
 
-    
-
-    indices: Option<Vec<usize>>, // Allocate this only if there are utf 8 chars in the row. Shamelessly stolen from kiro-editor by rhysd
-
-    syntax_highlighting: HashMap<usize,(u8,u8,u8)> // TODO: Add syntax highlighting
+    indices: Option<Vec<usize>>, // Allocate this only if there are utf 8 chars in the row. Shamelessly stolen from kiro-editor by rhysd    
 }
 //==========================================================================================
 
@@ -72,8 +69,7 @@ impl Row {
     pub fn empty() -> Self {
         Self {
             buf: String::new(),
-            indices: None,
-            syntax_highlighting: HashMap::new()
+            indices: None
         }
     }
 
@@ -89,8 +85,7 @@ impl Row {
 
         Self {
             buf: line,
-            indices,
-            syntax_highlighting: HashMap::new()
+            indices
         }
     }
 
@@ -186,7 +181,8 @@ impl Document {
     pub fn new(filename: String) -> Self {
         Self {
             filename,
-            rows: Vec::new()
+            rows: Vec::new(),
+            ..Document::default()
         }
     }
 
@@ -210,14 +206,15 @@ impl Document {
                 rows.push(Row::from_string(line));
             }
             else {
-                panic!();
+                
             }
         }
 
         Ok(
             Self {
                 rows,
-                filename
+                filename,
+                ..Document::default()
             }
         )
     }
@@ -230,6 +227,11 @@ impl Document {
         }
 
         Ok(())
+    }
+
+    #[inline]
+    pub fn display_name(&self) -> String {
+        Path::new(&self.filename).file_name().unwrap_or_default().to_str().unwrap_or_default().to_owned()
     }
 
     pub fn visual_rows_to(&self, width: usize, row_index: usize) -> usize {
@@ -264,6 +266,22 @@ impl Editor {
         self.width = width;
         self.height = height;
     }
+
+    pub fn add_doc(&mut self, doc: Document) {
+        self.docs.push(doc);
+        self.refresh_mouse_cache();
+    }
+
+    pub fn refresh_mouse_cache(&mut self) {
+        self.docs_mouse_cache.clear();
+
+        let mut i = 0;
+        for doc in &self.docs {
+            self.docs_mouse_cache.push((i, i + doc.display_name().width() + 2));
+
+            i += doc.display_name().width() + 3;
+        }
+    }
 }
 //==========================================================================================
 
@@ -272,6 +290,7 @@ impl Editor {
 impl Editor {
     pub fn start(mut self) -> Result<(), Box<dyn Error>> {
         std::io::stdout().execute(crossterm::terminal::EnterAlternateScreen)?;
+        println!("Made it");
 
         let args: Vec<String> = std::env::args().skip(1).collect();
 
@@ -288,7 +307,7 @@ impl Editor {
             self.open_doc = Some(0);
             for filename in args {
                 match Document::load(filename) {
-                    Ok(doc) => self.docs.push(doc),
+                    Ok(doc) => self.add_doc(doc),
                     Err(filename) => self.write_status_bar(Some(format!("File {} not found!",filename)))
                 }
             }
@@ -306,7 +325,7 @@ impl Editor {
                         if let Ok(filename) = self.read_new_filename() {
                             if !Path::new(&filename).exists() {
                                 self.open_doc = Some(self.docs.len());
-                                self.docs.push(Document::new(filename));
+                                self.add_doc(Document::new(filename));
                                 break;
                             }
                             else {
@@ -323,7 +342,7 @@ impl Editor {
                             match Document::load(filename) {
                                 Ok(doc) => {
                                     self.open_doc = Some(self.docs.len());
-                                    self.docs.push(doc);
+                                    self.add_doc(doc);
                                     break;
                                 },
                                 Err(filename) => self.write_status_bar(Some(format!("File {} not found!",filename)))
@@ -360,7 +379,7 @@ impl Editor {
 
         let mut status_msg = String::new();
 
-        loop {
+        'editor: loop {
             let (width, height) = (self.width() + 1,self.height());
 
             if redraw {
@@ -368,6 +387,9 @@ impl Editor {
                 print!("{}",crossterm::cursor::MoveTo(0,0));
             }
             std::io::stdout().flush().unwrap();
+
+            let num_docs = self.docs.len();
+
             if let Some(doc_index) = self.open_doc {
                 let lines;
                 {
@@ -415,9 +437,9 @@ impl Editor {
                 if !mouse_event {
                     self.draw_tabs();
                     #[cfg(debug_assertions)]
-                    self.write_status_bar(Some(format!("Debug:[col:{} w:{} diff:{}] Line {} of {} {}",self.cursor_col,width,self.docs[doc_index].visual_rows_to(width, self.cursor_row) as i32 - self.line_start as i32,self.cursor_row + 1,lines,status_msg)));
+                    self.write_status_bar(Some(format!("Debug:[col:{} w:{} diff:{}] Line {} of {} {}",self.docs[doc_index].cursor_col,width,self.docs[doc_index].visual_rows_to(width, self.docs[doc_index].cursor_row) as i32 - self.line_start as i32,self.docs[doc_index].cursor_row + 1,lines,status_msg)));
                     #[cfg(not(debug_assertions))]
-                    self.write_status_bar(Some(format!("Line {} of {} {}",self.cursor_row + 1,lines,status_msg)));
+                    self.write_status_bar(Some(format!("Line {} of {} {}",self.docs[doc_index].cursor_row + 1,lines,status_msg)));
                 }
                 
                 if !status_msg.is_empty() {
@@ -428,7 +450,7 @@ impl Editor {
                     let doc = &mut self.docs[doc_index];
                     
                     if !mouse_event {
-                        Editor::position_cursor(self.cursor_row - self.line_start,self.cursor_col,&doc.rows[self.cursor_row],width);
+                        Editor::position_cursor(doc.cursor_row - self.line_start,doc.cursor_col,&doc.rows[doc.cursor_row],width);
                     }
                     else {
                         mouse_event = false;
@@ -446,136 +468,140 @@ impl Editor {
                                         else if c == 'n' {
                                             let filename = self.read_new_filename()?;
                                             self.open_doc = Some(self.docs.len());
-                                            self.docs.push(Document::new(filename));
+                                            self.add_doc(Document::new(filename));
+
+                                            continue 'editor;
                                         }
                                         else if c == 'o' {
                                             let filename = self.read_new_filename()?;
                                             match Document::load(filename) {
                                                 Ok(doc) => {
                                                     self.open_doc = Some(self.docs.len());
-                                                    self.docs.push(doc);
+                                                    self.add_doc(doc);
+
+                                                    continue 'editor;
                                                 },
                                                 Err(filename) => self.write_status_bar(Some(format!("File {} not found!",filename)))
                                             }
                                         }
                                     }
                                     else {
-                                        doc.rows[self.cursor_row].insert_char(self.cursor_col, c);
-                                        self.cursor_col += 1;
+                                        doc.rows[doc.cursor_row].insert_char(doc.cursor_col, c);
+                                        doc.cursor_col += 1;
                                     }
                                 },
                                 KeyCode::Esc => break,
                                 KeyCode::Backspace => {
-                                    if doc.rows[self.cursor_row].len() != 0 {
-                                        if self.cursor_col == doc.rows[self.cursor_row].len() {
-                                            doc.rows[self.cursor_row].buf.pop();
-                                            self.cursor_col -= 1;
+                                    if doc.rows[doc.cursor_row].len() != 0 {
+                                        if doc.cursor_col == doc.rows[doc.cursor_row].len() {
+                                            doc.rows[doc.cursor_row].buf.pop();
+                                            doc.cursor_col -= 1;
                                         }
                                         else {
-                                            if self.cursor_col == 0 {
-                                                if self.cursor_row != 0 {
-                                                    self.cursor_row -= 1;
-                                                    self.cursor_col = doc.rows[self.cursor_row].len();
-                                                    if self.cursor_col == 0 {
-                                                        doc.rows.remove(self.cursor_row);
+                                            if doc.cursor_col == 0 {
+                                                if doc.cursor_row != 0 {
+                                                    doc.cursor_row -= 1;
+                                                    doc.cursor_col = doc.rows[doc.cursor_row].len();
+                                                    if doc.cursor_col == 0 {
+                                                        doc.rows.remove(doc.cursor_row);
                                                     }
                                                     else {
-                                                        let line = doc.rows[self.cursor_row + 1].buf.clone();
-                                                        doc.rows.remove(self.cursor_row + 1);
-                                                        doc.rows[self.cursor_row].buf.push_str(&line);
+                                                        let line = doc.rows[doc.cursor_row + 1].buf.clone();
+                                                        doc.rows.remove(doc.cursor_row + 1);
+                                                        doc.rows[doc.cursor_row].buf.push_str(&line);
                                                     }
                                                 }
                                             }
                                             else {
-                                                doc.rows[self.cursor_row].remove_at(self.cursor_col - 1);
-                                                self.cursor_col -= 1;
+                                                doc.rows[doc.cursor_row].remove_at(doc.cursor_col - 1);
+                                                doc.cursor_col -= 1;
                                             }
                                         }
                                     }
                                     else {
-                                        if self.cursor_row != 0 {
-                                            doc.rows.remove(self.cursor_row);
-                                            self.cursor_row -= 1;
-                                            self.cursor_col = doc.rows[self.cursor_row].len();
+                                        if doc.cursor_row != 0 {
+                                            doc.rows.remove(doc.cursor_row);
+                                            doc.cursor_row -= 1;
+                                            doc.cursor_col = doc.rows[doc.cursor_row].len();
                                         }
                                     }
                                 },
                                 KeyCode::Delete => {
-                                    if doc.rows[self.cursor_row].len() != 0 {
-                                        if self.cursor_col == doc.rows[self.cursor_row].len() {
-                                            if self.cursor_row + 1 < doc.rows.len() {
-                                                let next_line = doc.rows[self.cursor_row + 1].buf.clone();
-                                                doc.rows[self.cursor_row].buf.push_str(&next_line);
+                                    if doc.rows[doc.cursor_row].len() != 0 {
+                                        if doc.cursor_col == doc.rows[doc.cursor_row].len() {
+                                            if doc.cursor_row + 1 < doc.rows.len() {
+                                                let next_line = doc.rows[doc.cursor_row + 1].buf.clone();
+                                                doc.rows[doc.cursor_row].buf.push_str(&next_line);
 
-                                                doc.rows.remove(self.cursor_row + 1);
+                                                doc.rows.remove(doc.cursor_row + 1);
                                             }
                                         }
                                         else {
-                                            doc.rows[self.cursor_row].remove_at(self.cursor_col);
+                                            doc.rows[doc.cursor_row].remove_at(doc.cursor_col);
                                         }
                                     }
                                     else {
-                                        if self.cursor_row + 1 != doc.rows.len() {
-                                            doc.rows.remove(self.cursor_row);
+                                        if doc.cursor_row + 1 != doc.rows.len() {
+                                            doc.rows.remove(doc.cursor_row);
                                         }
                                     }
                                 },
                                 KeyCode::Tab => {
                                     for c in self.config.tab_str.chars() {
-                                        doc.rows[self.cursor_row].insert_char(self.cursor_col, c);
-                                        self.cursor_col += 1;
+                                        doc.rows[doc.cursor_row].insert_char(doc.cursor_col, c);
+                                        doc.cursor_col += 1;
                                     }
                                 },
                                 KeyCode::Enter => {
-                                    if self.cursor_col == 0 {
-                                        doc.rows.insert(self.cursor_row,Row::empty());
-                                        self.cursor_row += 1;
-                                        self.cursor_col = 0;
+                                    if doc.cursor_col == 0 {
+                                        doc.rows.insert(doc.cursor_row,Row::empty());
+                                        doc.cursor_row += 1;
+                                        doc.cursor_col = 0;
                                     }
-                                    else if self.cursor_col == doc.rows[self.cursor_row].len() {
-                                        doc.rows.insert(self.cursor_row + 1,Row::empty());
-                                        self.cursor_row += 1;
-                                        self.cursor_col = 0;
+                                    else if doc.cursor_col == doc.rows[doc.cursor_row].len() {
+                                        doc.rows.insert(doc.cursor_row + 1,Row::empty());
+                                        doc.cursor_row += 1;
+                                        doc.cursor_col = 0;
                                     }
                                     else {
-                                        let (left, right) = doc.rows[self.cursor_row].split_at(self.cursor_col);
-                                        doc.rows[self.cursor_row] = Row::from_string(left);
-                                        if self.cursor_row + 1 == doc.rows.len() {
-                                            doc.rows.insert(self.cursor_row + 1, Row::empty());
+                                        let (left, right) = doc.rows[doc.cursor_row].split_at(doc.cursor_col);
+                                        doc.rows[doc.cursor_row] = Row::from_string(left);
+                                        if doc.cursor_row + 1 == doc.rows.len() {
+                                            doc.rows.insert(doc.cursor_row + 1, Row::empty());
                                         }
-                                        else if self.cursor_row + 1 > doc.rows.len() {
+                                        else if doc.cursor_row + 1 > doc.rows.len() {
                                             doc.rows.push(Row::empty());
                                         }
-                                        doc.rows[self.cursor_row + 1] = Row::from_string(right);
+                                        doc.rows[doc.cursor_row + 1] = Row::from_string(right);
 
-                                        self.cursor_row += 1;
-                                        self.cursor_col = 0;
+                                        doc.cursor_row += 1;
+                                        doc.cursor_col = 0;
                                     }
                                 },
                                 KeyCode::Up => {
                                     if k.modifiers.contains(KeyModifiers::SHIFT) {
                                         self.line_start += 1;
                                     }
-                                    else if self.cursor_row != 0 {
-                                        self.cursor_row -= 1;
-                                        if self.cursor_col > doc.rows[self.cursor_row].len() {
-                                            self.cursor_col = doc.rows[self.cursor_row].len();
+                                    else if doc.cursor_row != 0 {
+                                        doc.cursor_row -= 1;
+                                        if doc.cursor_col > doc.rows[doc.cursor_row].len() {
+                                            doc.cursor_col = doc.rows[doc.cursor_row].len();
                                         }
                                     }
                                     redraw = false;
                                 },
                                 KeyCode::Down => {
-                                    if doc.rows[self.cursor_row].line_width() > width {
-                                        self.cursor_col += width;
-                                        if self.cursor_col > doc.rows[self.cursor_row].len() {
-                                            self.cursor_col = doc.rows[self.cursor_row].len();
+                                    if doc.rows[doc.cursor_row].line_width() > width {
+                                        doc.cursor_col += width;
+                                        if doc.cursor_col > doc.rows[doc.cursor_row].len() {
+                                            doc.cursor_col = doc.rows[doc.cursor_row].len();
                                         }
                                     }
                                     else {
-                                        if self.cursor_row + 1 != doc.rows.len() {
-                                            self.cursor_row += 1;
-                                            if self.cursor_col > doc.rows[self.cursor_row].len() {
-                                                self.cursor_col = doc.rows[self.cursor_row].len();
+                                        if doc.cursor_row + 1 != doc.rows.len() {
+                                            doc.cursor_row += 1;
+                                            if doc.cursor_col > doc.rows[doc.cursor_row].len() {
+                                                doc.cursor_col = doc.rows[doc.cursor_row].len();
                                             }
                                         }
                                     }
@@ -587,20 +613,17 @@ impl Editor {
                                             self.open_doc = Some(self.open_doc.unwrap() - 1);
                                         }
                                         else {
-                                            self.open_doc = Some(self.docs.len() - 1);
+                                            self.open_doc = Some(num_docs - 1);
                                         }
-
-                                        self.cursor_col = 0;
-                                        self.cursor_row = 0;
                                     }
                                     else {
-                                        if self.cursor_col != 0 {
-                                            self.cursor_col -= 1;
+                                        if doc.cursor_col != 0 {
+                                            doc.cursor_col -= 1;
                                         }
                                         else {
-                                            if self.cursor_row != 0 {
-                                                self.cursor_row -= 1;
-                                                self.cursor_col = doc.rows[self.cursor_row].len();
+                                            if doc.cursor_row != 0 {
+                                                doc.cursor_row -= 1;
+                                                doc.cursor_col = doc.rows[doc.cursor_row].len();
                                             }
                                         }
                                         redraw = false;
@@ -608,25 +631,22 @@ impl Editor {
                                 },
                                 KeyCode::Right => {
                                     if k.modifiers.contains(KeyModifiers::CONTROL) {
-                                        if self.open_doc.unwrap() + 1 < self.docs.len() {
+                                        if self.open_doc.unwrap() + 1 < num_docs {
                                             self.open_doc = Some(self.open_doc.unwrap() + 1);
                                         }
                                         else {
                                             self.open_doc = Some(0);
                                         }
-
-                                        self.cursor_col = 0;
-                                        self.cursor_row = 0;
                                     }
                                     else {
-                                        self.cursor_col += 1;
-                                        if self.cursor_col > doc.rows[self.cursor_row].len() {
-                                            if self.cursor_row + 1 != doc.rows.len() {
-                                                self.cursor_col = 0;
-                                                self.cursor_row += 1;
+                                        doc.cursor_col += 1;
+                                        if doc.cursor_col > doc.rows[doc.cursor_row].len() {
+                                            if doc.cursor_row + 1 != doc.rows.len() {
+                                                doc.cursor_col = 0;
+                                                doc.cursor_row += 1;
                                             }
                                             else {
-                                                self.cursor_col = doc.rows[self.cursor_row].len();
+                                                doc.cursor_col = doc.rows[doc.cursor_row].len();
                                             }
                                         }
                                         redraw = false;
@@ -642,22 +662,32 @@ impl Editor {
                         },
                         Mouse(e) => {
                             if e.kind == MouseEventKind::Down(MouseButton::Left) {
-                                if e.row - 1 < doc.rows.len() as u16 {
-                                    self.cursor_row = e.row as usize - 1;
-                                    if self.cursor_col > doc.rows[self.cursor_row].buf.len() {
-                                        self.cursor_col = doc.rows[self.cursor_row].buf.len();
+                                if e.row != 0 {
+                                    if e.row - 1 < doc.rows.len() as u16 {
+                                        doc.cursor_row = e.row as usize - 1;
+                                        if doc.cursor_col > doc.rows[doc.cursor_row].buf.len() {
+                                            doc.cursor_col = doc.rows[doc.cursor_row].buf.len();
+                                        }
                                     }
-                                }
-                                if e.column < doc.rows[self.cursor_row].buf.len() as u16 {
-                                    self.cursor_col = e.column as usize;
-                                    while !doc.rows[self.cursor_row].buf.is_char_boundary(self.cursor_col) {
-                                        self.cursor_col -= 1;
+                                    if e.column < doc.rows[doc.cursor_row].buf.len() as u16 {
+                                        doc.cursor_col = e.column as usize;
+                                        while !doc.rows[doc.cursor_row].buf.is_char_boundary(doc.cursor_col) {
+                                            doc.cursor_col -= 1;
+                                        }
                                     }
+                                    else {
+                                        doc.cursor_col = doc.rows[doc.cursor_row].len();
+                                    }
+                                    Editor::position_cursor(doc.cursor_row - self.line_start,doc.cursor_col,&doc.rows[doc.cursor_row],width);
                                 }
                                 else {
-                                    self.cursor_col = doc.rows[self.cursor_row].len();
+                                    for (i,doc_index) in self.docs_mouse_cache.iter().enumerate() {
+                                        if e.column > doc_index.0 as u16 && e.column < doc_index.1 as u16 {
+                                            self.open_doc = Some(i);
+                                            continue 'editor;
+                                        }
+                                    }
                                 }
-                                Editor::position_cursor(self.cursor_row - self.line_start,self.cursor_col,&doc.rows[self.cursor_row],width);
                             }
                             redraw = false;
                             mouse_event = true;
@@ -666,7 +696,7 @@ impl Editor {
                 }
 
                 let actual_rows = height as i32 - 3;
-                let diff = self.docs[doc_index].visual_rows_to(width, self.cursor_row) as i32 - self.line_start as i32;
+                let diff = self.docs[doc_index].visual_rows_to(width, self.docs[doc_index].cursor_row) as i32 - self.line_start as i32;
                 if diff >= actual_rows {
                     self.line_start += 1;
                     redraw = true;
@@ -734,7 +764,7 @@ impl Editor {
             if doc_bar.len() + doc.filename.len() + 3 < width {
                 if let Some(open_doc) = self.open_doc {
                     if open_doc == i {
-                        doc_bar.push_str(&format!("{}|{}|{} ",crossterm::style::Attribute::Reverse,Path::new(&doc.filename).file_name().unwrap_or_default().to_str().unwrap_or_default(),crossterm::style::Attribute::Reset));
+                        doc_bar.push_str(&format!("{}|{}|{} ",crossterm::style::Attribute::Reverse, doc.display_name() ,crossterm::style::Attribute::Reset));
                         i += 1;
                         continue;
                     }
@@ -790,11 +820,15 @@ impl Editor {
         let (width,height): (usize, usize) = (self.width(),self.height());
 
         let title_string = format!("Kelp Editor - {}", kelp_version());
+        let by_string = "Written in Rust by Vertex";
         
 
         for y in 0..height {
             if y != 0 && y == height / 2 {
                 println!("~{}{}{}"," ".repeat(width / 2 - 1 - title_string.len() / 2), title_string, " ".repeat(width - (width / 2 + 1 + title_string.len() / 2)));
+            }
+            else if y != 0 && y - 1 == height / 2 {
+                println!("~{}{}{}"," ".repeat(width / 2 - 1 - by_string.len() / 2), by_string, " ".repeat(width - (width / 2 + 1 + by_string.len() / 2)));
             }
             else {
                 if y != height - 1 {
@@ -833,7 +867,12 @@ impl Editor {
         let status_str = format!("[{}] - Doc {} of {}",filename,index,self.docs.len());
 
         let dir = std::env::current_dir().unwrap_or_default();
-        let dir = format!("{} [/{}]",extra_info.unwrap_or("".to_owned()),dir.iter().last().unwrap().to_os_string().into_string().unwrap());
+        let mut dir = format!("{} [/{}]",extra_info.unwrap_or("".to_owned()),dir.iter().last().unwrap().to_os_string().into_string().unwrap());
+
+        if width < status_str.len() + dir.len() + 8 {
+            dir.drain(..dir.char_indices().nth(status_str.len() + dir.len() + 8 - width).unwrap().0);
+            dir.insert_str(0,"...");
+        }
 
         print!("{}{}{}{}{}{}",crossterm::cursor::MoveTo(0,height as u16 - 2),crossterm::style::Attribute::Reverse,status_str," ".repeat(width as usize - status_str.len() - dir.len()),dir,crossterm::style::Attribute::Reset);
 
