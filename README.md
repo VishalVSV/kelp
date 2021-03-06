@@ -2,6 +2,10 @@
 Yet another terminal editor. Actually usable this time!
 
 ## Screenshots
+![Example](https://raw.githubusercontent.com/VishalVSV/kelp/master/images/example.png)
+
+
+![Title Screen](https://raw.githubusercontent.com/VishalVSV/kelp/master/images/title_screen.png)
 
 ## Mouse support
 ![Mouse](https://raw.githubusercontent.com/VishalVSV/kelp/master/images/mouse_support.gif)
