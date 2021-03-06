@@ -1,9 +1,10 @@
 /*
 TODO:
 1. Reorganize the mod file. Project is way bigger than I thought and I need to move components to different files.
-2. Collapse whitespace into a single Plain enum variant.
-3. Add per file type config
-4. Configurable syntax highlighting
+2. Collapse whitespace into a single Plain enum variant. - Done
+3. Add per file type config - Done
+4. Configurable syntax highlighting - In progress
+5. Rebindable keys
 
 */
 
@@ -60,16 +61,26 @@ pub struct Document {
     pub rows: Vec<Row>
 }
 
-#[derive(Default, Serialize, Deserialize,Debug)]
+#[derive(Serialize, Deserialize,Debug)]
 pub struct FileConfig {
+    #[serde(default)]
     pub tab_str: String,
+    #[serde(default)]
     pub line_ending: String,
 
+    #[serde(default)]
     pub line_comment_start: String,
+    #[serde(default)]
+    pub multi_line_comment: (String,String),
 
+    #[serde(default)]
     pub keywords: Vec<String>,
 
+    #[serde(default)]
     pub syntax_colors: HashMap<String, (u8,u8,u8)>,
+
+    #[serde(default)]
+    pub syntax_highlighting_disabled: bool,
 }
 
 #[derive(Default, Serialize, Deserialize,Debug)]
@@ -88,6 +99,26 @@ pub struct Row {
 //==========================================================================================
 
 // =========================================================================================
+impl Default for FileConfig {
+    fn default() -> Self {
+        let mut syntax_colors = HashMap::new();
+        syntax_colors.insert("identifier".to_owned(), (128,128,128));
+        syntax_colors.insert("keyword".to_owned(), (0,148,255));
+        syntax_colors.insert("comment".to_owned(), (0,127,14));
+        syntax_colors.insert("string".to_owned(), (255,240,24));
+
+        Self {
+            tab_str: String::from("    "),
+            line_ending: String::from("\\r\\n"),
+            syntax_colors, line_comment_start: "//".to_owned(),
+            keywords: vec![ ],
+            syntax_highlighting_disabled: false,
+            multi_line_comment: ("/*".to_owned(),"*/".to_owned())
+        }
+    }
+}
+
+
 impl Row {
     pub fn empty() -> Self {
         Self {
@@ -137,7 +168,6 @@ impl Row {
     #[inline]
     pub fn display_buf(&mut self, config: &FileConfig) -> Cow<String> {
         if self.tokens.len() == 0 {
-            self.refresh_highlighting(config);
             Cow::Borrowed(&self.buf)
         }
         else {
@@ -167,7 +197,7 @@ impl Row {
                         res.push_str(&tmp);
                     },
                     Token::Plain(range) => {
-                        res.push_str(&self.buf[range.start..range.end]);  
+                        res.push_str(&self.buf[range.start..range.end]);
                     },
                     Token::Comment(range) => {
                         let tmp = format!("{}{}\x1B[0m",crossterm::style::SetForegroundColor(Color::from(*comment)),&self.buf[range.start..range.end]);
@@ -190,11 +220,6 @@ impl Row {
 
             Cow::Owned(res)
         }
-    }
-
-    #[inline]
-    pub fn refresh_highlighting(&mut self, config: &FileConfig) {
-        self.tokens = Token::tokenize(&self.buf,config);
     }
 
     #[inline]
@@ -356,24 +381,15 @@ impl Document {
     }
 
     pub fn tokenize(&mut self, start: usize, end: usize, config: &FileConfig) {
-        for row in self.rows.iter_mut().skip(start).take(end - start) {
-            row.refresh_highlighting(config);
-        }
+        Token::tokenize(&mut self.rows,start, end - start, config);
     }
 }
 
 impl Editor {
     pub fn new() -> Self {
-        let mut syntax_colors = HashMap::new();
-
-        syntax_colors.insert("identifier".to_owned(), (128,128,128));
-        syntax_colors.insert("keyword".to_owned(), (0,148,255));
-        syntax_colors.insert("comment".to_owned(), (0,127,14));
-        syntax_colors.insert("string".to_owned(), (255,240,24));
-
         let mut config = EditorConfig { languages: HashMap::new() };
 
-        config.languages.insert("*".to_owned() , FileConfig { tab_str: String::from("    "),line_ending: String::from("\\r\\n"), syntax_colors, line_comment_start: "//".to_owned(), keywords: vec!["int".to_owned(), "char".to_owned(),"return".to_owned()]});
+        config.languages.insert("*".to_owned() , FileConfig::default());
 
         let mut path = std::env::current_exe().unwrap_or_default();
         path.pop();

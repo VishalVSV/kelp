@@ -1,3 +1,4 @@
+use crate::editor::Row;
 use crate::editor::FileConfig;
 use core::ops::Range;
 
@@ -13,216 +14,238 @@ pub enum Token {
     Number(Range<usize>)
 }
 
+enum TokenizerAction {
+    ParseString(char),
+    ParseComment
+}
+
 impl Token {
-    pub fn tokenize(src: &String, config: &FileConfig) -> Vec<Self> {
-        let mut res = Vec::new();
+    pub fn tokenize(rows: &mut Vec<Row>,from: usize,num_lines: usize, config: &FileConfig) {
+        if config.syntax_highlighting_disabled {
+            return;
+        }
 
-        let char_indices: Vec<(usize,char)> = src.char_indices().collect();
+        let mut parser = None;
 
-        let mut odd_token = String::new();
+        for row in rows.iter_mut().skip(from).take(num_lines) {
+            let mut res = Vec::new();
 
-        let mut i = 0;
-        while i < char_indices.len() {
-            if odd_token.ends_with(&config.line_comment_start) {
-                if odd_token.len() > config.line_comment_start.len() {
-                    res.push(Token::Plain(i - odd_token.len()..i - config.line_comment_start.len()));
-                }
-                res.push(Token::Comment(i - config.line_comment_start.len()..src.len()));
-                odd_token.clear();
-                break;
-            }
+            let src = &row.buf;
 
-            if char_indices[i].1.is_alphabetic() || char_indices[i].1 == '_' {
-                if !odd_token.is_empty() {
-                    if odd_token.ends_with(&config.line_comment_start) {
-                        if odd_token.len() > config.line_comment_start.len() {
-                            res.push(Token::Plain(i - odd_token.len()..i - config.line_comment_start.len()));
+            let char_indices: Vec<(usize,char)> = src.char_indices().collect();
+    
+            let mut odd_token = String::new();
+    
+            let mut i = 0;
+            macro_rules! parse_string {
+                ($c: expr) => {
+                    if !odd_token.is_empty() {
+                        if odd_token.ends_with(&config.line_comment_start) {
+                            if odd_token.len() > config.line_comment_start.len() {
+                                res.push(Token::Plain(i - odd_token.len()..i - config.line_comment_start.len()));
+                            }
+                            res.push(Token::Comment(i - config.line_comment_start.len()..src.len()));
+                            odd_token.clear();
+                            break;
                         }
-                        res.push(Token::Comment(i - config.line_comment_start.len()..src.len()));
+                        else {
+                            res.push(Token::Plain(i - odd_token.len()..i));
+                        }
+    
                         odd_token.clear();
-                        break;
+                    }
+    
+                    let mut len = 1;
+                    i += 1;
+                    while i < char_indices.len() && char_indices[i].1 != $c {
+                        len += 1;
+                        i += 1;
+                    }
+    
+                    if i < char_indices.len() {
+                        len += 1;
+                        i += 1;
                     }
                     else {
+                        parser = Some(TokenizerAction::ParseString($c));
+                    }
+    
+                    res.push(Token::String(i - len..i));
+                    
+                    i -= 1;
+                            
+                };
+            }
+
+            macro_rules! string_match {
+                ($str: expr) => {
+                    {
+                        let mut offset = 0;
+                        let mut res = true;
+                        for c in $str.chars() {
+                            if i + offset < char_indices.len() {
+                                if c != char_indices[i + offset].1 {
+                                    res = false;
+                                    break;
+                                }
+                            }
+                            else {
+                                res = false;
+                                break;
+                            }
+                            offset += 1;
+                        }
+                        res
+                    }
+                };
+            }
+
+            macro_rules! handle_odd_token {
+                () => {
+                    if !odd_token.is_empty() {
                         res.push(Token::Plain(i - odd_token.len()..i));
+                        odd_token.clear();
+                    }
+                };
+            }
+            
+            if let Some(p) = &parser {
+                match p {
+                    TokenizerAction::ParseString(c) => {
+                        let mut len = 0;
+                        while i < char_indices.len() && char_indices[i].1 != *c {
+                            i += 1;
+                            len += 1;
+                        }
+                        if i != char_indices.len() {
+                            len += 1;
+                            i += 1;
+                            res.push(Token::String(i - len..i));
+                            parser = None;
+                        }
+                        else {
+                            res.push(Token::String(0..src.len()));
+                        }
+                    },
+                    TokenizerAction::ParseComment => {
+                        let mut len = 0;
+                        while i < char_indices.len() && !string_match!(config.multi_line_comment.1) {
+                            i += 1;
+                            len += 1;
+                        }
+                        if i < char_indices.len() {
+                            len += config.multi_line_comment.1.chars().count();
+                            i += config.multi_line_comment.1.chars().count();
+
+                            res.push(Token::Comment(i - len..i));
+                            parser = None;
+                        }
+                        else {
+                            res.push(Token::Comment(0..src.len()));
+                            row.tokens = res;
+                            continue;
+                        }
+                    }
+                }
+            }
+            while i < char_indices.len() {    
+                if char_indices[i].1.is_alphabetic() || char_indices[i].1 == '_' {
+                    handle_odd_token!();
+
+                    let mut len = 0;
+                    while i < char_indices.len() && (char_indices[i].1.is_alphabetic() || char_indices[i].1 == '_') {
+                        len += 1;
+                        i += 1;
+                    }
+    
+                    if i < char_indices.len() && char_indices[i].1 == '(' {
+                        res.push(Token::FnCall(i - len..i));
+                    }
+                    else if i < char_indices.len() && char_indices[i].1 == '!' {
+                        res.push(Token::Macro(i - len..i));
+                    }
+                    else if config.keywords.contains(&src[i - len..i].to_owned()) {
+                        res.push(Token::Keyword(i - len..i));
+                    }
+                    else {
+                        res.push(Token::Identifier(i - len..i));
+                    }
+    
+                    
+                    if i != char_indices.len() {
+                        i -= 1;
+                    }
+                }
+                else if char_indices[i].1.is_numeric() {
+                    handle_odd_token!();
+
+                    let mut len = 0;
+                    while i < char_indices.len() && char_indices[i].1.is_numeric() {
+                        len += 1;
+                        i += 1;
+                    }
+    
+                    res.push(Token::Number(i - len..i));
+                    
+                    if i != char_indices.len() {
+                        i -= 1;
+                    }
+                }
+                else if char_indices[i].1 == '"' {
+                    handle_odd_token!();
+                    
+                    parse_string!('"');
+                }
+                else if char_indices[i].1 == '\'' {
+                    handle_odd_token!();
+                    
+                    parse_string!('\'');
+                }
+                else if char_indices[i].1 == '`' {    
+                    handle_odd_token!();
+                                    
+                    parse_string!('`');
+                }
+                else if string_match!(config.line_comment_start) {
+                    handle_odd_token!();
+                    
+                    res.push(Token::Comment(i..src.len()));
+                    i = src.len();
+                }
+                else if string_match!(config.multi_line_comment.0) {
+                    handle_odd_token!();
+                    
+                    let mut len = 0;
+                    while i < char_indices.len() && !string_match!(config.multi_line_comment.1) {
+                        i += 1;
+                        len += 1;
                     }
 
-                    odd_token.clear();
-                }
+                    if i < char_indices.len() {
+                        let line_ender_len = config.multi_line_comment.1.chars().count();
+                        i += line_ender_len;
+                        len += line_ender_len;
 
-                let mut len = 0;
-                while i < char_indices.len() && (char_indices[i].1.is_alphabetic() || char_indices[i].1 == '_') {
-                    len += 1;
-                    i += 1;
-                }
+                        res.push(Token::Comment(i - len..i));
 
-                if i < char_indices.len() && char_indices[i].1 == '(' {
-                    res.push(Token::FnCall(i - len..i));
-                }
-                else if i < char_indices.len() && char_indices[i].1 == '!' {
-                    res.push(Token::Macro(i - len..i));
-                }
-                else if config.keywords.contains(&src[i - len..i].to_owned()) {
-                    res.push(Token::Keyword(i - len..i));
+                        i -= 1;
+                    }
+                    else {
+                        res.push(Token::Comment(i - len..i));
+                        parser = Some(TokenizerAction::ParseComment);
+                        break;
+                    }
                 }
                 else {
-                    res.push(Token::Identifier(i - len..i));
+                    odd_token.push(char_indices[i].1);
                 }
-
-                
-                if i != char_indices.len() {
-                    i -= 1;
-                }
-            }
-            else if char_indices[i].1.is_numeric() {
-                if !odd_token.is_empty() {
-                    if odd_token.ends_with(&config.line_comment_start) {
-                        if odd_token.len() > config.line_comment_start.len() {
-                            res.push(Token::Plain(i - odd_token.len()..i - config.line_comment_start.len()));
-                        }
-                        res.push(Token::Comment(i - config.line_comment_start.len()..src.len()));
-                        odd_token.clear();
-                        break;
-                    }
-                    else {
-                        res.push(Token::Plain(i - odd_token.len()..i));
-                    }
-
-                    odd_token.clear();
-                }
-
-                let mut len = 0;
-                while i < char_indices.len() && char_indices[i].1.is_numeric() {
-                    len += 1;
-                    i += 1;
-                }
-
-                res.push(Token::Number(i - len..i));
-                
-                if i != char_indices.len() {
-                    i -= 1;
-                }
-            }
-            else if char_indices[i].1 == '"' {
-                if !odd_token.is_empty() {
-                    if odd_token.ends_with(&config.line_comment_start) {
-                        if odd_token.len() > config.line_comment_start.len() {
-                            res.push(Token::Plain(i - odd_token.len()..i - config.line_comment_start.len()));
-                        }
-                        res.push(Token::Comment(i - config.line_comment_start.len()..src.len()));
-                        odd_token.clear();
-                        break;
-                    }
-                    else {
-                        res.push(Token::Plain(i - odd_token.len()..i));
-                    }
-
-                    odd_token.clear();
-                }
-
-                let mut len = 1;
+    
                 i += 1;
-                while i < char_indices.len() && char_indices[i].1 != '"' {
-                    len += 1;
-                    i += 1;
-                }
-
-                if i < char_indices.len() {
-                    len += 1;
-                    i += 1;
-                }
-
-                res.push(Token::String(i - len..i));
-                
-                i -= 1;
             }
-            else if char_indices[i].1 == '\'' {
-                if !odd_token.is_empty() {
-                    if odd_token.ends_with(&config.line_comment_start) {
-                        if odd_token.len() > config.line_comment_start.len() {
-                            res.push(Token::Plain(i - odd_token.len()..i - config.line_comment_start.len()));
-                        }
-                        res.push(Token::Comment(i - config.line_comment_start.len()..src.len()));
-                        odd_token.clear();
-                        break;
-                    }
-                    else {
-                        res.push(Token::Plain(i - odd_token.len()..i));
-                    }
-
-                    odd_token.clear();
-                }
-
-                let mut len = 1;
-                i += 1;
-                while i < char_indices.len() && char_indices[i].1 != '\'' {
-                    len += 1;
-                    i += 1;
-                }
-
-                if i < char_indices.len() {
-                    len += 1;
-                    i += 1;
-                }
-
-                res.push(Token::String(i - len..i));
-                
-                i -= 1;
-            }
-            else if char_indices[i].1 == '`' {
-                if !odd_token.is_empty() {
-                    if odd_token.ends_with(&config.line_comment_start) {
-                        if odd_token.len() > config.line_comment_start.len() {
-                            res.push(Token::Plain(i - odd_token.len()..i - config.line_comment_start.len()));
-                        }
-                        res.push(Token::Comment(i - config.line_comment_start.len()..src.len()));
-                        odd_token.clear();
-                        break;
-                    }
-                    else {
-                        res.push(Token::Plain(i - odd_token.len()..i));
-                    }
-
-                    odd_token.clear();
-                }
-
-                let mut len = 1;
-                i += 1;
-                while i < char_indices.len() && char_indices[i].1 != '`' {
-                    len += 1;
-                    i += 1;
-                }
-
-                if i < char_indices.len() {
-                    len += 1;
-                    i += 1;
-                }
-
-                res.push(Token::String(i - len..i));
-                
-                i -= 1;
-            }
-            else {
-                odd_token.push(char_indices[i].1);
-            }
-
-            i += 1;
+            handle_odd_token!();
+    
+            row.tokens = res;
         }
-
-        if !odd_token.is_empty() {
-            if odd_token.ends_with(&config.line_comment_start) {
-                if odd_token.len() > config.line_comment_start.len() {
-                    res.push(Token::Plain(i - odd_token.len()..i - config.line_comment_start.len()));
-                }
-                res.push(Token::Comment(i - config.line_comment_start.len()..src.len()));
-            }
-            else {
-                res.push(Token::Plain(i - odd_token.len()..i));
-            }
-
-            odd_token.clear();
-        }
-
-        res
     }
 
     pub fn start(&self) -> usize {

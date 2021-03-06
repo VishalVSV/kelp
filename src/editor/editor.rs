@@ -34,7 +34,7 @@ impl Editor {
 
                 match Document::load(filename) {
                     Ok(doc) => self.add_doc(doc),
-                    Err(filename) => self.write_status_bar(Some(format!("File {} not found!",filename)))
+                    Err(filename) => self.add_doc(Document::new(filename))
                 }
             }
             let config = 
@@ -100,6 +100,8 @@ impl Editor {
                     }
         
                     if redraw {
+                        Token::tokenize(&mut doc.rows,doc.line_start,height - 3 ,config);
+
                         let mut drawing_row = 0;
                         let mut processing_row = 0;
 
@@ -230,7 +232,6 @@ impl Editor {
                                     else {
                                         doc.rows[doc.cursor_row].insert_char(doc.cursor_col, c);
                                         doc.cursor_col += 1;
-                                        doc.rows[doc.cursor_row].tokens = Token::tokenize(&doc.rows[doc.cursor_row].buf, config);
                                     }
                                 },
                                 KeyCode::Esc => break,
@@ -269,7 +270,7 @@ impl Editor {
                                         }
                                     }
 
-                                    doc.rows[doc.cursor_row].tokens = Token::tokenize(&doc.rows[doc.cursor_row].buf, config);
+                                    
                                 },
                                 KeyCode::Delete => {
                                     if doc.rows[doc.cursor_row].len() != 0 {
@@ -279,29 +280,26 @@ impl Editor {
                                                 doc.rows[doc.cursor_row].buf.push_str(&next_line);
 
                                                 doc.rows.remove(doc.cursor_row + 1);
-                                                doc.rows[doc.cursor_row].tokens = Token::tokenize(&doc.rows[doc.cursor_row].buf, config);
+                                                
                                             }
                                         }
                                         else {
                                             doc.rows[doc.cursor_row].remove_at(doc.cursor_col);
-                                            doc.rows[doc.cursor_row].tokens = Token::tokenize(&doc.rows[doc.cursor_row].buf, config);
+                                            
                                         }
                                     }
                                     else {
                                         if doc.cursor_row + 1 != doc.rows.len() {
                                             doc.rows.remove(doc.cursor_row);
-                                            doc.rows[doc.cursor_row].tokens = Token::tokenize(&doc.rows[doc.cursor_row].buf, config);
                                         }
                                     }
 
-                                    doc.rows[doc.cursor_row].tokens = Token::tokenize(&doc.rows[doc.cursor_row].buf, config);
                                 },
                                 KeyCode::Tab => {
                                     for c in unescape(&config.tab_str).unwrap().chars() {
                                         doc.rows[doc.cursor_row].insert_char(doc.cursor_col, c);
                                         doc.cursor_col += 1;
                                     }
-                                    doc.rows[doc.cursor_row].tokens = Token::tokenize(&doc.rows[doc.cursor_row].buf, config);
                                 },
                                 KeyCode::Enter => {
                                     if doc.cursor_col == 0 {
@@ -324,9 +322,6 @@ impl Editor {
                                             doc.rows.push(Row::empty());
                                         }
                                         doc.rows[doc.cursor_row + 1] = Row::from_string(right);
-
-                                        doc.rows[doc.cursor_row].refresh_highlighting(config);
-                                        doc.rows[doc.cursor_row + 1].refresh_highlighting(config);
 
                                         doc.cursor_row += 1;
                                         doc.cursor_col = 0;
@@ -441,6 +436,16 @@ impl Editor {
                                         redraw = false;
                                     }
                                 },
+                                KeyCode::Home => {
+                                    doc.line_start = 0;
+                                    doc.cursor_col = 0;
+                                    doc.cursor_row = 0;
+                                },
+                                KeyCode::End => {
+                                    doc.line_start = doc.rows.len() - height + 3;
+                                    doc.cursor_col = 0;
+                                    doc.cursor_row = doc.rows.len() - 1;
+                                },
                                 _ => {}
                             };
                         },
@@ -475,22 +480,6 @@ impl Editor {
                                             self.open_doc = Some(i);
                                             continue 'editor;
                                         }
-                                    }
-                                }
-                            }
-                            else if e.kind == MouseEventKind::ScrollDown {
-                                if doc.line_start + height + 1 < doc.rows.len() {
-                                    doc.line_start += 1;
-                                    if doc.cursor_row < doc.line_start {
-                                        doc.cursor_row = doc.line_start;
-                                    }
-                                }
-                            }
-                            else if e.kind == MouseEventKind::ScrollUp {
-                                if doc.line_start != 0 {
-                                    doc.line_start -= 1;
-                                    if doc.cursor_row > doc.line_start + height - 3 {
-                                        doc.cursor_row -= 1;
                                     }
                                 }
                             }
