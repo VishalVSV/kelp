@@ -7,6 +7,9 @@ Yet another terminal editor. Actually usable this time!
 
 ![Example](https://raw.githubusercontent.com/VishalVSV/kelp/master/images/example.png)
 
+## Mouse support
+![Mouse](https://raw.githubusercontent.com/VishalVSV/kelp/master/images/mouse_support.gif)
+
 ## TODO:
 1. Syntax highlighting
 2. Themes and config files
