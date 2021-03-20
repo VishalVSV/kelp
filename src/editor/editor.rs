@@ -1,3 +1,6 @@
+use clipboard::ClipboardContext;
+use clipboard::ClipboardProvider;
+use crate::editor::history::UndoRedo;
 use crate::Editor;
 use crate::editor::*;
 use crate::editor::highlight::Token;
@@ -11,6 +14,25 @@ use std::error::Error;
 use crossterm::ExecutableCommand;
 
 use std::io::Write;
+
+#[cfg(debug_assertions)]
+pub fn is_debug() -> bool {
+    true
+}
+
+#[cfg(not(debug_assertions))]
+pub fn is_debug() -> bool {
+    false
+}
+
+#[allow(dead_code)]
+pub fn debug_file() -> String {
+    std::env::current_exe().unwrap().to_string_lossy().to_string()
+}
+
+fn line_ending() -> String {
+    "\r\n".to_owned()
+}
 
 impl Editor {
     pub fn start(mut self) -> Result<(), Box<dyn Error>> {
@@ -69,6 +91,8 @@ impl Editor {
 
         let mut status_msg = String::new();
 
+        let mut undergoing_selection = false;
+
         'editor: loop {
             let (width, height) = (self.width() + 1,self.height());
 
@@ -90,64 +114,80 @@ impl Editor {
                         &self.config.languages[&"*".to_owned()]
                     };
 
-                let lines;
-                {
-                    let doc = &mut self.docs[doc_index];
-                    lines = doc.rows.len();
+                let lines = self.docs[doc_index].rows.len();
 
-                    if doc.rows.len() == 0 {
-                        doc.rows.push(Row::empty());
+                if self.docs[doc_index].rows.len() == 0 {
+                    self.docs[doc_index].rows.push(Row::empty());
+                }
+
+                if !undergoing_selection {
+                    self.docs[doc_index].selection = None;
+                }
+                else {
+                    undergoing_selection = false;
+                }
+    
+                let selection = self.docs[doc_index].selection.clone();
+
+                if redraw {
+                    if self.docs[doc_index].selection.is_some() {
+                        let s = self.docs[doc_index].selection.as_mut().unwrap();
+
+                        if s.start_row == s.end_row && s.end_col == s.start_col {
+                            self.docs[doc_index].selection = None;
+                        }
                     }
-        
-                    if redraw {
-                        Token::tokenize(&mut doc.rows,doc.line_start,height - 3 ,config);
 
-                        let mut drawing_row = 0;
-                        let mut processing_row = 0;
+                    let line_start = self.docs[doc_index].line_start;
 
-                        while drawing_row < height - 2 {
-                            if drawing_row == 0 {
-                                println!();
-                            }
-                            else if processing_row + doc.line_start - 1 < doc.rows.len() {
-                                if doc.rows[processing_row - 1 + doc.line_start].line_width() > width {
-                                    let n = doc.rows[processing_row - 1 + doc.line_start].line_width() / width;
-                                    let padding = width * (n + 1) - doc.rows[processing_row - 1 + doc.line_start].line_width();
-                                    println!("{}{}",doc.rows[processing_row - 1 + doc.line_start].display_buf(config)," ".repeat(padding));
-                                    drawing_row += n;
-                                }
-                                else {
-                                    let padding = width - doc.rows[processing_row - 1 + doc.line_start].line_width();
-                                    println!("{}{}",doc.rows[processing_row - 1 + doc.line_start].display_buf(config)," ".repeat(padding));
-                                }
+                    Token::tokenize(&mut self.docs[doc_index].rows, HighlightingInfo { selection: selection } ,line_start,height - 3 ,config);
+
+                    let mut drawing_row = 0;
+                    let mut processing_row = 0;
+
+                    while drawing_row < height - 2 {
+                        if drawing_row == 0 {
+                            println!();
+                        }
+                        else if processing_row + line_start - 1 < self.docs[doc_index].rows.len() {
+
+                            if self.docs[doc_index].rows[processing_row - 1 + line_start].line_width() > width {
+
+                                let n = self.docs[doc_index].rows[processing_row - 1 + line_start].line_width() / width;
+                                let padding = width * (n + 1) - self.docs[doc_index].rows[processing_row - 1 + line_start].line_width();
+                                println!("{}{}",self.docs[doc_index].rows[processing_row - 1 + line_start].display_buf(config)," ".repeat(padding));
+                                drawing_row += n;
                             }
                             else {
-                                println!("~{}"," ".repeat(width - 1));
+                                let padding = width - self.docs[doc_index].rows[processing_row - 1 + line_start].line_width();
+                                println!("{}{}",self.docs[doc_index].rows[processing_row - 1 + line_start].display_buf(config)," ".repeat(padding));
                             }
-                            drawing_row += 1;
-                            processing_row += 1;
                         }
-
-                        if clear {
-                            clear = false;
+                        else {
                             println!("~{}"," ".repeat(width - 1));
-                            println!("~{}"," ".repeat(width - 1));                        
                         }
+                        drawing_row += 1;
+                        processing_row += 1;
                     }
-                    else {
-                        redraw = true;
+
+                    if clear {
+                        clear = false;
+                        println!("~{}"," ".repeat(width - 1));
+                        println!("~{}"," ".repeat(width - 1));                        
                     }
                 }
+                else {
+                    redraw = true;
+                }
+                
 
                 if !mouse_event {
                     self.draw_tabs();
-                    #[cfg(debug_assertions)]
-                    {
+                    if is_debug() {
                         let row = self.docs[doc_index].cursor_row;
-                        self.write_status_bar(Some(format!("Debug:[col:{} tokens:{}] Line {} of {} {}",self.docs[doc_index].cursor_col,self.docs[doc_index].rows[row].tokens.len(),self.docs[doc_index].cursor_row + 1,lines,status_msg)));
+                        self.write_status_bar(Some(format!("Debug:[col:{} tokens:{} i:{} history_count:{}] Line {} of {} {}",self.docs[doc_index].cursor_col,self.docs[doc_index].rows[row].tokens.len(), self.docs[doc_index].history_index.unwrap_or(0),self.docs[doc_index].history.len(),self.docs[doc_index].cursor_row + 1,lines,status_msg)));
                     }
-                    #[cfg(not(debug_assertions))]
-                    {
+                    else {
                         self.write_status_bar(Some(format!("Line {} of {} {}",self.docs[doc_index].cursor_row + 1,lines,status_msg)));
                     }
                 }
@@ -158,7 +198,7 @@ impl Editor {
 
                 {
                     let doc = &mut self.docs[doc_index];
-                    
+
                     if !mouse_event {
                         Editor::position_cursor(doc.cursor_row,doc.cursor_col,&doc.rows,width,doc.line_start);
                     }
@@ -173,6 +213,7 @@ impl Editor {
                                     if k.modifiers.contains(KeyModifiers::CONTROL) {
                                         if c == 's' {
                                             doc.save(config)?;
+                                            doc.dirty = 0;
                                             status_msg = format!("Saved file as {} in ",doc.filename);
                                         }
                                         else if c == 'n' {
@@ -226,19 +267,133 @@ impl Editor {
                                                         }
                                                     }
                                                 }
+                                                else if command.starts_with("cd") {
+                                                    command.drain(..2);
+                                                    let mut dir = std::env::current_dir().unwrap();
+                                                    if command.trim() == ".." {
+                                                        if dir.pop() {
+                                                            std::env::set_current_dir(dir)?;
+                                                        }
+                                                    }
+                                                    else {
+                                                        dir.push(command.trim());
+                                                        if dir.exists() {
+                                                            std::env::set_current_dir(dir)?;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        else if c == 'z' {
+                                            if let Some(history_index) = doc.history_index {
+                                                if history_index < doc.history.len() {
+                                                    let (x,y) = doc.history[history_index].apply(&mut doc.rows, UndoRedo::Undo);
+
+                                                    if history_index == 0 {
+                                                        doc.history_index = None;
+                                                    }
+                                                    else {
+                                                        *doc.history_index.as_mut().unwrap() -= 1;
+                                                    }
+                                                    doc.cursor_col = x;
+                                                    doc.cursor_row = y;
+                                                }
+                                            }
+                                        }
+                                        else if c == 'y' {
+                                            if let Some(history_index) = doc.history_index {
+                                                if history_index + 1 < doc.history.len() {
+                                                    let (x,y) = doc.history[history_index + 1].apply(&mut doc.rows, UndoRedo::Redo);
+                                                    *doc.history_index.as_mut().unwrap() += 1;
+                                                    doc.cursor_col = x;
+                                                    doc.cursor_row = y;
+                                                }
+                                            }
+                                            else if doc.history.len() > 0 {
+                                                status_msg = format!("{:?}", doc.history[0]);
+                                                let (x,y) = doc.history[0].apply(&mut doc.rows, UndoRedo::Redo);
+                                                doc.history_index = Some(0);
+                                                doc.cursor_col = x;
+                                                doc.cursor_row = y;
+                                            }
+                                        }
+                                        else if c == 'c' {
+                                            if let Some(sel) = doc.selection {
+                                                let mut selection_string = String::new();
+                                                if sel.start_row == sel.end_row {
+                                                    let start = std::cmp::min(sel.start_col,sel.end_col);
+                                                    let end = std::cmp::max(sel.start_col,sel.end_col);
+
+                                                    selection_string = doc.rows[sel.start_row].substring(start, end).to_string();
+                                                }
+                                                else {
+                                                    let start = std::cmp::min(sel.start_row,sel.end_row);
+                                                    let end = std::cmp::max(sel.start_row,sel.end_row);
+                                                    let start_col = if sel.start_row == start { sel.start_col } else { sel.end_col };
+                                                    let end_col = if sel.end_col == end { sel.end_col } else { sel.start_col };
+
+
+                                                    for i in start..=end {
+                                                        if i == start {
+                                                            selection_string.push_str(&format!("{}{}",doc.rows[i].substring(start_col, doc.rows[i].len()),line_ending()))
+                                                        }
+                                                        else if i == end {
+                                                            selection_string.push_str(doc.rows[i].substring(0, end_col));
+                                                        }
+                                                        else {
+                                                            selection_string.push_str(&format!("{}{}",doc.rows[i].buf, line_ending()));
+                                                        }
+                                                    }
+                                                }
+
+                                                undergoing_selection = true;
+
+                                                let mut ctx: ClipboardContext = ClipboardProvider::new().unwrap();
+                                                ctx.set_contents(selection_string)?;
+                                            }
+                                        }
+                                        else if c == 'v' {
+                                            let mut ctx: ClipboardContext = ClipboardProvider::new().unwrap();
+                                            if let Ok(clipboard_contents) = ctx.get_contents() {
+                                                let mut i = 0;
+                                                let line_count = clipboard_contents.lines().count();
+                                                for line in clipboard_contents.lines() {
+                                                    for c in line.chars() {
+                                                        doc.dirty += 1;
+                                                        doc.rows[doc.cursor_row].insert_char(doc.cursor_col, c);
+                                                        doc.add_diff(EditDiff::InsertChar(doc.cursor_col, doc.cursor_row, c));
+
+                                                        doc.cursor_col += 1;
+                                                    }
+
+                                                    if i + 1 < line_count {
+                                                        doc.rows.insert(doc.cursor_row + 1, Row::empty());
+                                                        doc.cursor_row += 1;
+                                                        doc.cursor_col = 0;
+                                                    }
+
+                                                    i += 1;
+                                                }
                                             }
                                         }
                                     }
                                     else {
+                                        doc.dirty += 1;
                                         doc.rows[doc.cursor_row].insert_char(doc.cursor_col, c);
+                                        doc.add_diff(EditDiff::InsertChar(doc.cursor_col, doc.cursor_row, c));
+
                                         doc.cursor_col += 1;
                                     }
                                 },
                                 KeyCode::Esc => break,
                                 KeyCode::Backspace => {
+                                    doc.dirty += 1;
                                     if doc.rows[doc.cursor_row].len() != 0 {
                                         if doc.cursor_col == doc.rows[doc.cursor_row].len() {
-                                            doc.rows[doc.cursor_row].buf.pop();
+                                            let c = doc.rows[doc.cursor_row].buf.pop().unwrap();
+
+                                            doc.add_diff(EditDiff::DeleteChar(doc.cursor_col,doc.cursor_row,c, true));
+                                            
                                             doc.cursor_col -= 1;
                                         }
                                         else {
@@ -248,15 +403,21 @@ impl Editor {
                                                     doc.cursor_col = doc.rows[doc.cursor_row].len();
                                                     if doc.cursor_col == 0 {
                                                         doc.rows.remove(doc.cursor_row);
+
+                                                        doc.add_diff(EditDiff::DeleteLine(doc.cursor_row, String::new()));
                                                     }
                                                     else {
                                                         let line = doc.rows[doc.cursor_row + 1].buf.clone();
                                                         doc.rows.remove(doc.cursor_row + 1);
+                                                        doc.add_diff(EditDiff::DeleteLine(doc.cursor_row + 1, line.clone()));
                                                         doc.rows[doc.cursor_row].buf.push_str(&line);
                                                     }
                                                 }
                                             }
                                             else {
+                                                let c = doc.rows[doc.cursor_row].buf.chars().nth(doc.cursor_col - 1).unwrap();
+                                                doc.add_diff(EditDiff::DeleteChar(doc.cursor_col - 1, doc.cursor_row,c, true));
+
                                                 doc.rows[doc.cursor_row].remove_at(doc.cursor_col - 1);
                                                 doc.cursor_col -= 1;
                                             }
@@ -264,6 +425,8 @@ impl Editor {
                                     }
                                     else {
                                         if doc.cursor_row != 0 {
+                                            doc.add_diff(EditDiff::DeleteLine(doc.cursor_row, String::new()));
+
                                             doc.rows.remove(doc.cursor_row);
                                             doc.cursor_row -= 1;
                                             doc.cursor_col = doc.rows[doc.cursor_row].len();
@@ -273,42 +436,63 @@ impl Editor {
                                     
                                 },
                                 KeyCode::Delete => {
+                                    doc.dirty += 1;
                                     if doc.rows[doc.cursor_row].len() != 0 {
                                         if doc.cursor_col == doc.rows[doc.cursor_row].len() {
                                             if doc.cursor_row + 1 < doc.rows.len() {
                                                 let next_line = doc.rows[doc.cursor_row + 1].buf.clone();
                                                 doc.rows[doc.cursor_row].buf.push_str(&next_line);
 
-                                                doc.rows.remove(doc.cursor_row + 1);
-                                                
+                                                doc.rows.remove(doc.cursor_row + 1);                                                
                                             }
                                         }
                                         else {
+                                            let c = doc.rows[doc.cursor_row].buf.chars().nth(doc.cursor_col).unwrap();
+
+                                            doc.add_diff(EditDiff::DeleteChar(doc.cursor_col + 1, doc.cursor_row, c, false));
                                             doc.rows[doc.cursor_row].remove_at(doc.cursor_col);
-                                            
                                         }
                                     }
                                     else {
                                         if doc.cursor_row + 1 != doc.rows.len() {
                                             doc.rows.remove(doc.cursor_row);
+                                            doc.add_diff(EditDiff::DeleteLine(doc.cursor_row, String::new()));
                                         }
                                     }
-
                                 },
                                 KeyCode::Tab => {
+                                    doc.dirty += 1;
                                     for c in unescape(&config.tab_str).unwrap().chars() {
                                         doc.rows[doc.cursor_row].insert_char(doc.cursor_col, c);
+                                        doc.add_diff(EditDiff::InsertChar(doc.cursor_col, doc.cursor_row, c));
+
                                         doc.cursor_col += 1;
                                     }
                                 },
                                 KeyCode::Enter => {
-                                    if doc.cursor_col == 0 {
+                                    doc.dirty += 1;
+                                    if doc.rows[doc.cursor_row].len() == 0 {
+                                        doc.rows.insert(doc.cursor_row + 1,Row::empty());
+                                        doc.add_diff(EditDiff::NewLine(doc.cursor_row + 1));
+                                        
+                                        doc.cursor_row += 1;
+                                        doc.cursor_col = 0;
+                                    }
+                                    else if doc.cursor_col == 0 {
+                                        // doc.undo.push(wrap!(Action::AddRow(doc.cursor_row)));
+
                                         doc.rows.insert(doc.cursor_row,Row::empty());
+                                        doc.add_diff(EditDiff::NewLine(doc.cursor_row));
+
                                         doc.cursor_row += 1;
                                         doc.cursor_col = 0;
                                     }
                                     else if doc.cursor_col == doc.rows[doc.cursor_row].len() {
+                                        // doc.undo.push(wrap!(Action::AddRow(doc.cursor_row + 1)));
+
                                         doc.rows.insert(doc.cursor_row + 1,Row::empty());
+                                        doc.add_diff(EditDiff::NewLine(doc.cursor_row + 1));
+                                        
                                         doc.cursor_row += 1;
                                         doc.cursor_col = 0;
                                     }
@@ -316,11 +500,17 @@ impl Editor {
                                         let (left, right) = doc.rows[doc.cursor_row].split_at(doc.cursor_col);
                                         doc.rows[doc.cursor_row] = Row::from_string(left);
                                         if doc.cursor_row + 1 <= doc.rows.len() {
+                                            // doc.undo.push(wrap!(Action::AddRow(doc.cursor_row + 1)));
+
                                             doc.rows.insert(doc.cursor_row + 1, Row::empty());
                                         }
                                         else if doc.cursor_row + 1 > doc.rows.len() {
+                                            // doc.undo.push(wrap!(Action::AddRow(doc.rows.len())));
+
                                             doc.rows.push(Row::empty());
                                         }
+                                        doc.add_diff(EditDiff::SplitLine(doc.cursor_col, doc.cursor_row));
+                                        
                                         doc.rows[doc.cursor_row + 1] = Row::from_string(right);
 
                                         doc.cursor_row += 1;
@@ -328,6 +518,9 @@ impl Editor {
                                     }
                                 },
                                 KeyCode::Up => {
+                                    let cursor_row = doc.cursor_row;
+                                    let cursor_col = doc.cursor_col;
+
                                     if doc.rows[doc.cursor_row].line_width() > width && doc.cursor_col > width {
                                         doc.cursor_col -= width;
                                     }
@@ -339,9 +532,26 @@ impl Editor {
                                             }
                                         }
                                     }
-                                    redraw = false;
+                                    
+                                    
+                                    if k.modifiers.contains(KeyModifiers::SHIFT) {
+                                        if doc.selection.is_none() {
+                                            doc.selection = Some(Selection::new(cursor_row,cursor_col, doc.cursor_row,doc.cursor_col));
+                                        }
+                                        else {
+                                            let selection = doc.selection.as_mut().unwrap();
+                                            
+                                            selection.end_row = doc.cursor_row;
+                                            selection.end_col = doc.cursor_col;
+                                        }
+
+                                        undergoing_selection = true;
+                                    }
                                 },
                                 KeyCode::Down => {
+                                    let cursor_row = doc.cursor_row;
+                                    let cursor_col = doc.cursor_col;
+
                                     if doc.rows[doc.cursor_row].line_width() > width {
                                         doc.cursor_col += width;
                                         if doc.cursor_col > doc.rows[doc.cursor_row].len() {
@@ -357,9 +567,24 @@ impl Editor {
                                             }
                                         }
                                     }
-                                    redraw = false;
+
+                                    if k.modifiers.contains(KeyModifiers::SHIFT) {
+                                        if doc.selection.is_none() {
+                                            doc.selection = Some(Selection::new(cursor_row,cursor_col, doc.cursor_row,doc.cursor_col));
+                                        }
+                                        else {
+                                            let selection = doc.selection.as_mut().unwrap();
+                                            
+                                            selection.end_row = doc.cursor_row;
+                                            selection.end_col = doc.cursor_col;
+                                        }
+                                        undergoing_selection = true;
+                                    }
                                 },
                                 KeyCode::Left => {
+                                    let cursor_row = doc.cursor_row;
+                                    let cursor_col = doc.cursor_col;
+
                                     if k.modifiers.contains(KeyModifiers::CONTROL) && k.modifiers.contains(KeyModifiers::SHIFT) {
                                         if self.open_doc.unwrap() != 0 {
                                             self.open_doc = Some(self.open_doc.unwrap() - 1);
@@ -393,10 +618,25 @@ impl Editor {
                                                 doc.cursor_col = doc.rows[doc.cursor_row].len();
                                             }
                                         }
-                                        redraw = false;
+                                    }
+
+                                    if k.modifiers.contains(KeyModifiers::SHIFT) {
+                                        if doc.selection.is_none() {
+                                            doc.selection = Some(Selection::new(cursor_row,cursor_col, doc.cursor_row,doc.cursor_col));
+                                        }
+                                        else {
+                                            let selection = doc.selection.as_mut().unwrap();
+                                            
+                                            selection.end_row = doc.cursor_row;
+                                            selection.end_col = doc.cursor_col;
+                                        }
+                                        undergoing_selection = true;
                                     }
                                 },
                                 KeyCode::Right => {
+                                    let cursor_row = doc.cursor_row;
+                                    let cursor_col = doc.cursor_col;
+
                                     if k.modifiers.contains(KeyModifiers::CONTROL) && k.modifiers.contains(KeyModifiers::SHIFT) {
                                         if self.open_doc.unwrap() + 1 < num_docs {
                                             self.open_doc = Some(self.open_doc.unwrap() + 1);
@@ -433,18 +673,26 @@ impl Editor {
                                                 doc.cursor_col = doc.rows[doc.cursor_row].len();
                                             }
                                         }
-                                        redraw = false;
+                                    }
+
+                                    if k.modifiers.contains(KeyModifiers::SHIFT) {
+                                        if doc.selection.is_none() {
+                                            doc.selection = Some(Selection::new(cursor_row,cursor_col, doc.cursor_row,doc.cursor_col));
+                                        }
+                                        else {
+                                            let selection = doc.selection.as_mut().unwrap();
+                                            
+                                            selection.end_row = doc.cursor_row;
+                                            selection.end_col = doc.cursor_col;
+                                        }
+                                        undergoing_selection = true;
                                     }
                                 },
                                 KeyCode::Home => {
-                                    doc.line_start = 0;
                                     doc.cursor_col = 0;
-                                    doc.cursor_row = 0;
                                 },
                                 KeyCode::End => {
-                                    doc.line_start = doc.rows.len() - height + 3;
-                                    doc.cursor_col = 0;
-                                    doc.cursor_row = doc.rows.len() - 1;
+                                    doc.cursor_col = doc.rows[doc.cursor_row].len();
                                 },
                                 _ => {}
                             };
@@ -455,6 +703,8 @@ impl Editor {
                             clear = true;
                         },
                         Mouse(e) => {
+                            redraw = false;
+                            mouse_event = true;
                             if e.kind == MouseEventKind::Down(MouseButton::Left) {
                                 if e.row != 0 {
                                     if e.row - 1 < doc.rows.len() as u16 {
@@ -477,14 +727,53 @@ impl Editor {
                                 else {
                                     for (i,doc_index) in self.docs_mouse_cache.iter().enumerate() {
                                         if e.column > doc_index.0 as u16 && e.column < doc_index.1 as u16 {
-                                            self.open_doc = Some(i);
-                                            continue 'editor;
+                                            if doc_index.1 as u16 - e.column == 1 {
+                                                if self.docs.len() > 1 {
+                                                    if i != 0 {
+                                                        self.open_doc = Some(i - 1);
+                                                    }
+                                                    else {
+                                                        self.open_doc = Some(1);
+                                                    }
+                                                    self.docs.remove(i);
+                                                    redraw = true;
+                                                    mouse_event = false;
+                                                    continue 'editor;
+                                                }
+                                                else if self.docs.len() > 0 {
+                                                    self.open_doc = None;
+                                                    self.docs.remove(i);
+                                                    redraw = true;
+                                                    mouse_event = false;
+                                                    continue 'editor;
+                                                }
+                                                else {
+                                                    // Technically unreachable I think
+                                                    self.open_doc = None;
+                                                    redraw = true;
+                                                    mouse_event = false;
+                                                    continue 'editor;
+                                                }
+                                            }
+                                            else {
+                                                                                                
+                                            }
+                                        }
+                                    }
+                                }
+                            } 
+                            else if e.kind == crossterm::event::MouseEventKind::Moved {
+                                self.refresh_mouse_cache();
+
+                                for (i,doc_index) in self.docs_mouse_cache.iter().enumerate() {
+                                    self.docs[i].show_close = false;
+                                    if e.column > doc_index.0 as u16 && e.column < doc_index.1 as u16 {
+                                        if doc_index.1 as u16 - e.column == 1 {
+                                            self.docs[i].show_close = true;
                                         }
                                     }
                                 }
                             }
-                            redraw = false;
-                            mouse_event = true;
                         }
                     }
                 }
@@ -501,7 +790,7 @@ impl Editor {
                 }
             }
             else {
-
+                self.main_screen()?;
             }
         }
 
@@ -568,6 +857,27 @@ impl Editor {
                         redraw = true;
                     }
                 }
+                else if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('g') {
+                    if let Ok(mut command) = self.read_new_filename(None) {
+                        if command.starts_with("cd") {
+                            command.drain(..2);
+                            let mut dir = std::env::current_dir().unwrap();
+                            if command.trim() == ".." {
+                                if dir.pop() {
+                                    std::env::set_current_dir(dir)?;
+                                    redraw = true;
+                                }
+                            }
+                            else {
+                                dir.push(command.trim());
+                                if dir.exists() {
+                                    std::env::set_current_dir(dir)?;
+                                    redraw = true;
+                                }
+                            }
+                        }
+                    }
+                }
                 else if k.code == KeyCode::Esc {
                     
                     std::io::stdout().execute(crossterm::event::DisableMouseCapture)?.execute(crossterm::terminal::Clear(crossterm::terminal::ClearType::All))?.execute(crossterm::cursor::MoveTo(0,0))?;
@@ -628,14 +938,21 @@ impl Editor {
         let mut i = 0;
         for doc in &self.docs {
             if doc_bar.len() + doc.filename.len() + 3 < width {
+                let tab_str = format!("{}{} x",doc.display_name(),
+                    if doc.dirty > 0 {
+                        " *"
+                    }
+                    else {
+                        ""
+                    });
                 if let Some(open_doc) = self.open_doc {
                     if open_doc == i {
-                        doc_bar.push_str(&format!("{}|{}|{} ",crossterm::style::Attribute::Reverse, doc.display_name() ,crossterm::style::Attribute::Reset));
+                        doc_bar.push_str(&format!("{}|{}|{} ",crossterm::style::Attribute::Reverse, tab_str ,crossterm::style::Attribute::Reset));
                         i += 1;
                         continue;
                     }
                 }
-                doc_bar.push_str(&format!("|{}| ",Path::new(&doc.filename).file_name().unwrap_or_default().to_str().unwrap_or_default()));
+                doc_bar.push_str(&format!("|{}| ",tab_str));
             }
             i += 1;
         }

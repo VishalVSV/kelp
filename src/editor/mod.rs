@@ -9,8 +9,11 @@ TODO:
 */
 
 mod highlight;
+mod plugin;
 mod editor;
+mod history;
 
+use crate::editor::history::EditDiff;
 use unescape::unescape;
 use std::borrow::Cow;
 use crate::editor::highlight::Token;
@@ -22,7 +25,6 @@ use std::error::Error;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 use std::collections::HashMap;
-use crossterm::style::Color;
 use std::io::Read;
 
 use std::io::Write;
@@ -50,6 +52,18 @@ pub struct Editor {
     docs_mouse_cache: Vec<(usize,usize)>
 }
 
+#[derive(Debug, Copy, Clone)]
+pub struct Selection {
+    pub start_row: usize,
+    pub start_col: usize,
+    pub end_row: usize,
+    pub end_col: usize
+}
+
+pub struct HighlightingInfo {
+    pub selection: Option<Selection>
+}
+
 #[derive(Default)]
 pub struct Document {
     pub filename: String,
@@ -58,7 +72,14 @@ pub struct Document {
     pub cursor_col: usize,
     pub line_start: usize,
 
-    pub rows: Vec<Row>
+    pub rows: Vec<Row>,
+    pub selection: Option<Selection>,
+
+    pub dirty: usize,
+    pub show_close: bool,
+
+    pub history: Vec<EditDiff>,
+    pub history_index: Option<usize>
 }
 
 #[derive(Serialize, Deserialize,Debug)]
@@ -118,6 +139,16 @@ impl Default for FileConfig {
     }
 }
 
+impl Selection {
+    pub fn new(start_row: usize, start_col: usize, end_row: usize, end_col: usize) -> Self {
+        Self {
+            start_col,
+            start_row,
+            end_row,
+            end_col
+        }
+    }
+}
 
 impl Row {
     pub fn empty() -> Self {
@@ -174,48 +205,9 @@ impl Row {
 
             let mut res = String::new();
 
-            let ident = config.syntax_colors.get(&"identifier".to_owned()).unwrap_or(&(255,255,255));
-            let keyword = config.syntax_colors.get(&"keyword".to_owned()).unwrap_or(&(255,255,255));
-            let string = config.syntax_colors.get(&"string".to_owned()).unwrap_or(&(255,255,255));
-            let comment = config.syntax_colors.get(&"comment".to_owned()).unwrap_or(&(255,255,255));
-            let fncall = config.syntax_colors.get(&"fncall".to_owned()).unwrap_or(&(255,255,255));
-            let macro_ = config.syntax_colors.get(&"macro".to_owned()).unwrap_or(&(255,255,255));
-            let number = config.syntax_colors.get(&"number".to_owned()).unwrap_or(&(255,255,255));
-
             for token in &self.tokens {
-                match token {
-                    Token::Identifier(range) => {
-                        let tmp = format!("{}{}\x1B[0m",crossterm::style::SetForegroundColor(Color::from(*ident)),&self.buf[range.start..range.end]);
-                        res.push_str(&tmp);
-                    },
-                    Token::Keyword(range) => {
-                        let tmp = format!("{}{}\x1B[0m",crossterm::style::SetForegroundColor(Color::from(*keyword)),&self.buf[range.start..range.end]);
-                        res.push_str(&tmp);
-                    },
-                    Token::String(range) => {
-                        let tmp = format!("{}{}\x1B[0m",crossterm::style::SetForegroundColor(Color::from(*string)),&self.buf[range.start..range.end]);
-                        res.push_str(&tmp);
-                    },
-                    Token::Plain(range) => {
-                        res.push_str(&self.buf[range.start..range.end]);
-                    },
-                    Token::Comment(range) => {
-                        let tmp = format!("{}{}\x1B[0m",crossterm::style::SetForegroundColor(Color::from(*comment)),&self.buf[range.start..range.end]);
-                        res.push_str(&tmp);
-                    },
-                    Token::FnCall(range) => {
-                        let tmp = format!("{}{}\x1B[0m",crossterm::style::SetForegroundColor(Color::from(*fncall)),&self.buf[range.start..range.end]);
-                        res.push_str(&tmp);
-                    },
-                    Token::Macro(range) => {
-                        let tmp = format!("{}{}\x1B[0m",crossterm::style::SetForegroundColor(Color::from(*macro_)),&self.buf[range.start..range.end]);
-                        res.push_str(&tmp);
-                    },
-                    Token::Number(range) => {
-                        let tmp = format!("{}{}\x1B[0m",crossterm::style::SetForegroundColor(Color::from(*number)),&self.buf[range.start..range.end]);
-                        res.push_str(&tmp);
-                    },
-                }
+                let tmp = format!("{}{}\x1B[0m",token.get_style(config),&self.buf[token.get_range().start..token.get_range().end]);
+                res.push_str(&tmp);
             }
 
             Cow::Owned(res)
@@ -288,6 +280,15 @@ impl Row {
         }
     }
 
+    pub fn substring(&self, start: usize, end: usize) -> &str {
+        if self.indices.is_some() {
+            &self.buf[self.indices.as_ref().unwrap()[start]..self.indices.as_ref().unwrap()[end]]
+        }
+        else {
+            &self.buf[start..end]
+        }
+    }
+
     #[inline]
     fn refresh_cache(&mut self) {
         self.indices = Some(self.buf.char_indices().map(|index| index.0).collect());
@@ -355,6 +356,26 @@ impl Document {
         Ok(())
     }
 
+    pub fn add_diff(&mut self, diff: EditDiff) {
+        if let Some(history_index) = self.history_index {
+            if history_index + 1 < self.history.len() {
+                self.history.truncate(history_index + 2);
+
+                self.history[history_index + 1] = diff;
+                *self.history_index.as_mut().unwrap() += 1;
+            }
+            else {
+                self.history.push(diff);
+                *self.history_index.as_mut().unwrap() = self.history.len() - 1;
+            }
+        }
+        else {
+            self.history.clear();
+            self.history.push(diff);
+            self.history_index = Some(self.history.len() - 1);
+        }
+    }
+
     #[inline]
     pub fn display_name(&self) -> String {
         Path::new(&self.filename).file_name().unwrap_or_default().to_str().unwrap_or_default().to_owned()
@@ -381,7 +402,7 @@ impl Document {
     }
 
     pub fn tokenize(&mut self, start: usize, end: usize, config: &FileConfig) {
-        Token::tokenize(&mut self.rows,start, end - start, config);
+        Token::tokenize(&mut self.rows, HighlightingInfo { selection: self.selection },start, end - start, config);
     }
 }
 
@@ -438,9 +459,21 @@ impl Editor {
 
         let mut i = 0;
         for doc in &self.docs {
-            self.docs_mouse_cache.push((i, i + doc.display_name().width() + 2));
+            self.docs_mouse_cache.push((i, i + doc.display_name().width() + 2 /*Side bars*/ + 2 /*Close icon*/ + 
+                if doc.dirty == 0 {
+                    0
+                }
+                else {
+                    2
+                }));
 
-            i += doc.display_name().width() + 3;
+            i += doc.display_name().width() + 2 /*Side bars*/ + 2 /*Close icon*/ + 
+            if doc.dirty == 0 {
+                0
+            }
+            else {
+                2
+            };
         }
     }
 }
