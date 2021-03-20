@@ -200,10 +200,6 @@ impl Token {
                         else {
                             res.push(Token::String(0..src.len()));
                         }
-
-                        if len > 0 {
-                            i -= len - 1;
-                        }
                     },
                     TokenizerAction::ParseComment => {
                         let mut len = 0;

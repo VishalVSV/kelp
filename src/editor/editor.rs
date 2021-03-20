@@ -27,7 +27,10 @@ pub fn is_debug() -> bool {
 
 #[allow(dead_code)]
 pub fn debug_file() -> String {
-    std::env::current_exe().unwrap().to_string_lossy().to_string()
+    let mut path = std::env::current_exe().unwrap();
+    path.pop();
+    path.push("debug.txt");
+    path.to_string_lossy().to_string()
 }
 
 fn line_ending() -> String {
