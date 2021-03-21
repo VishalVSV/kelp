@@ -1,3 +1,4 @@
+use crossterm::style::Color;
 use clipboard::ClipboardContext;
 use clipboard::ClipboardProvider;
 use crate::editor::history::UndoRedo;
@@ -33,7 +34,13 @@ pub fn debug_file() -> String {
     path.to_string_lossy().to_string()
 }
 
-fn line_ending() -> String {
+#[cfg(not(windows))]
+pub fn line_ending() -> String {
+    "\n".to_owned()
+}
+
+#[cfg(windows)]
+pub fn line_ending() -> String {
     "\r\n".to_owned()
 }
 
@@ -102,8 +109,8 @@ impl Editor {
             if redraw {
                 print!("{}",crossterm::cursor::Hide);
                 print!("{}",crossterm::cursor::MoveTo(0,0));
+                std::io::stdout().flush().unwrap();
             }
-            std::io::stdout().flush().unwrap();
 
             let num_docs = self.docs.len();
 
@@ -158,12 +165,12 @@ impl Editor {
 
                                 let n = self.docs[doc_index].rows[processing_row - 1 + line_start].line_width() / width;
                                 let padding = width * (n + 1) - self.docs[doc_index].rows[processing_row - 1 + line_start].line_width();
-                                println!("{}{}",self.docs[doc_index].rows[processing_row - 1 + line_start].display_buf(config)," ".repeat(padding));
+                                println!("{}{}{}{}",self.docs[doc_index].rows[processing_row - 1 + line_start].display_buf(config, &self.config.theme), crossterm::style::SetBackgroundColor(Color::from(self.config.theme.background_color)),crossterm::style::SetForegroundColor(Color::from(self.config.theme.foreground_color))," ".repeat(padding));
                                 drawing_row += n;
                             }
                             else {
                                 let padding = width - self.docs[doc_index].rows[processing_row - 1 + line_start].line_width();
-                                println!("{}{}",self.docs[doc_index].rows[processing_row - 1 + line_start].display_buf(config)," ".repeat(padding));
+                                println!("{}{}{}{}",self.docs[doc_index].rows[processing_row - 1 + line_start].display_buf(config, &self.config.theme),crossterm::style::SetBackgroundColor(Color::from(self.config.theme.background_color)),crossterm::style::SetForegroundColor(Color::from(self.config.theme.foreground_color))," ".repeat(padding));
                             }
                         }
                         else {
@@ -797,6 +804,12 @@ impl Editor {
             }
         }
 
+        let mut path = std::env::current_exe().unwrap_or_default();
+        path.pop();
+        path.push("config.json");
+        let mut config_file = std::fs::File::create(path)?;
+
+        config_file.write_all(serde_json::to_string_pretty(&self.config)?.as_bytes())?;
         
         std::io::stdout().execute(crossterm::event::DisableMouseCapture)?.execute(crossterm::terminal::Clear(crossterm::terminal::ClearType::All))?.execute(crossterm::cursor::MoveTo(0,0))?;
         print!("\x1B[?1000;1006;1015l");
@@ -810,6 +823,8 @@ impl Editor {
 
     pub fn main_screen(&mut self) -> Result<(),Box<dyn Error>> {
         let mut redraw = true;
+
+        print!("{}{}",crossterm::style::SetBackgroundColor(Color::from(self.config.theme.background_color)),crossterm::style::SetForegroundColor(Color::from(self.config.theme.foreground_color)));
 
         loop {
             if redraw {
@@ -902,7 +917,7 @@ impl Editor {
 
     fn write_status_bar(&self,mut extra_info: Option<String>) {
         if extra_info.is_none() {
-            extra_info = Some("Ctrl+N: New file | Ctrl+O: Open file  ".to_owned());
+            extra_info = Some("Ctrl+G: Command | Ctrl+N: New file | Ctrl+O: Open file  ".to_owned());
         }
 
         let (width, height) = (self.width(),self.height());
@@ -928,7 +943,7 @@ impl Editor {
             dir.insert_str(0,"...");
         }
 
-        print!("{}{}{}{}{}{}",crossterm::cursor::MoveTo(0,height as u16 - 2),crossterm::style::Attribute::Reverse,status_str," ".repeat(width as usize - status_str.len() - dir.len()),dir,crossterm::style::Attribute::Reset);
+        print!("{}{}{}{}{}{}{}",crossterm::cursor::MoveTo(0,height as u16 - 2),crossterm::style::SetBackgroundColor(Color::from(self.config.theme.foreground_color)),crossterm::style::SetForegroundColor(Color::from(self.config.theme.background_color)),status_str," ".repeat(width as usize - status_str.len() - dir.len()),dir,crossterm::style::Attribute::Reset);
 
         std::io::stdout().flush().unwrap();
     }
@@ -950,7 +965,7 @@ impl Editor {
                     });
                 if let Some(open_doc) = self.open_doc {
                     if open_doc == i {
-                        doc_bar.push_str(&format!("{}|{}|{} ",crossterm::style::Attribute::Reverse, tab_str ,crossterm::style::Attribute::Reset));
+                        doc_bar.push_str(&format!("{}|{}|{}{}{} ",crossterm::style::Attribute::Reverse, tab_str, crossterm::style::Attribute::Reset, crossterm::style::SetBackgroundColor(Color::from(self.config.theme.background_color)),crossterm::style::SetForegroundColor(Color::from(self.config.theme.foreground_color))));
                         i += 1;
                         continue;
                     }
@@ -960,7 +975,7 @@ impl Editor {
             i += 1;
         }
 
-        print!("{}{}{}",crossterm::cursor::MoveTo(0,0),doc_bar," ".repeat(width - doc_bar.len()));
+        print!("{}{}{}{}{}",crossterm::cursor::MoveTo(0,0),doc_bar.trim(),crossterm::style::SetBackgroundColor(Color::from(self.config.theme.background_color)),crossterm::style::SetForegroundColor(Color::from(self.config.theme.foreground_color))," ".repeat(width - doc_bar.len()));
     }
 
     fn read_new_filename(&self, filename_def: Option<String>) -> Result<String, Box<dyn Error>> {
@@ -1011,6 +1026,7 @@ impl Editor {
 
     pub fn show_start_splash(&self) -> Result<(), Box<dyn Error>> {
         print!("{}",crossterm::cursor::MoveTo(0,0));
+        print!("{}{}",crossterm::style::SetBackgroundColor(Color::from(self.config.theme.background_color)),crossterm::style::SetForegroundColor(Color::from(self.config.theme.foreground_color)));
 
         std::io::stdout().flush()?;
 

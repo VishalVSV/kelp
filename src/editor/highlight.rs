@@ -380,6 +380,7 @@ impl Token {
             }
         }
 
+        
         res.push(tokens[token_id_outer as usize].clone());
         let l = res.len();
         *res[l - 1].get_range_mut() = start..i_outer + 1;

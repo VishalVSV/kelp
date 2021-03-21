@@ -13,6 +13,9 @@ mod plugin;
 mod editor;
 mod history;
 
+use crate::editor::editor::line_ending;
+use libloading::Library;
+use crate::editor::plugin::Plugin;
 use crate::editor::history::EditDiff;
 use unescape::unescape;
 use std::borrow::Cow;
@@ -49,7 +52,10 @@ pub struct Editor {
     width: usize,
     height: usize,
 
-    docs_mouse_cache: Vec<(usize,usize)>
+    docs_mouse_cache: Vec<(usize,usize)>,
+
+    pub plugins: Vec<Box<dyn Plugin>>,
+    pub libs: Vec<Library>
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -106,7 +112,17 @@ pub struct FileConfig {
 
 #[derive(Default, Serialize, Deserialize,Debug)]
 pub struct EditorConfig {
-    pub languages: HashMap<String, FileConfig>
+    #[serde(default)]
+    pub languages: HashMap<String, FileConfig>,
+
+    #[serde(default)]
+    pub theme: Theme
+}
+
+#[derive(Serialize, Deserialize,Debug)]
+pub struct Theme {
+    pub background_color: (u8, u8, u8),
+    pub foreground_color: (u8, u8, u8)
 }
 
 #[allow(dead_code)]
@@ -130,11 +146,20 @@ impl Default for FileConfig {
 
         Self {
             tab_str: String::from("    "),
-            line_ending: String::from("\\r\\n"),
+            line_ending: line_ending(),
             syntax_colors, line_comment_start: "//".to_owned(),
             keywords: vec![ ],
             syntax_highlighting_disabled: false,
             multi_line_comment: ("/*".to_owned(),"*/".to_owned())
+        }
+    }
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Self {
+            foreground_color: (255, 255, 255),
+            background_color: (0, 0, 0)
         }
     }
 }
@@ -197,7 +222,10 @@ impl Row {
     }
 
     #[inline]
-    pub fn display_buf(&mut self, config: &FileConfig) -> Cow<String> {
+    pub fn display_buf(&mut self, file_config: &FileConfig, theme: &Theme) -> Cow<String> {
+        let f_color = crossterm::style::SetForegroundColor(crossterm::style::Color::from(theme.foreground_color));
+        let b_color = crossterm::style::SetBackgroundColor(crossterm::style::Color::from(theme.background_color));
+
         if self.tokens.len() == 0 {
             Cow::Borrowed(&self.buf)
         }
@@ -206,7 +234,7 @@ impl Row {
             let mut res = String::new();
 
             for token in &self.tokens {
-                let tmp = format!("{}{}\x1B[0m",token.get_style(config),&self.buf[token.get_range().start..token.get_range().end]);
+                let tmp = format!("{}{}{}{}\x1B[0m",f_color, b_color, token.get_style(file_config),&self.buf[token.get_range().start..token.get_range().end]);
                 res.push_str(&tmp);
             }
 
@@ -344,7 +372,7 @@ impl Document {
         for row in &self.rows {
             file.write(
                 if row_index + 1 != self.rows.len() {
-                    format!("{}{}",row.buf,unescape(&config.line_ending).unwrap_or("\r\n".to_owned()))
+                    format!("{}{}",row.buf,unescape(&config.line_ending).unwrap_or("\n".to_owned()))
                 }
                 else {
                     format!("{}",row.buf)
@@ -408,7 +436,16 @@ impl Document {
 
 impl Editor {
     pub fn new() -> Self {
-        let mut config = EditorConfig { languages: HashMap::new() };
+        if let Ok(mut plugin_path) = std::env::current_exe() {
+            plugin_path.pop();
+            plugin_path.push("plugins/");
+
+            // TODO: Plugin loading
+        }
+
+        let default_theme = Theme { background_color: (0, 0, 0), foreground_color: (255, 255, 255) };
+
+        let mut config = EditorConfig { languages: HashMap::new(), theme: default_theme };
 
         config.languages.insert("*".to_owned() , FileConfig::default());
 
