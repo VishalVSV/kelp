@@ -1,4 +1,4 @@
-use crate::editor::Row;
+use crate::editor::prelude::*;
 
 pub enum UndoRedo {
     Undo,
@@ -8,7 +8,7 @@ pub enum UndoRedo {
 type X = usize;
 type Y = usize;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum EditDiff {
     InsertChar(X, Y, char),
     DeleteChar(X, Y, char, bool),// Backspace or delete

@@ -1,9 +1,12 @@
+use crate::editor::utils::pad_center_str;
+use std::time::SystemTime;
 use crossterm::style::Color;
 use clipboard::ClipboardContext;
 use clipboard::ClipboardProvider;
 use crate::editor::history::UndoRedo;
 use crate::Editor;
 use crate::editor::*;
+use crate::editor::prelude::*;
 use crate::editor::highlight::Token;
 use std::path::Path;
 use crossterm::event::{MouseEventKind,MouseButton};
@@ -11,10 +14,25 @@ use crossterm::event::Event::Resize;
 use crossterm::event::{Event::{Key,Mouse},KeyModifiers,KeyCode};
 use crossterm::event::read;
 use std::error::Error;
+use crate::editor::utils::pad_center;
 
 use crossterm::ExecutableCommand;
 
 use std::io::Write;
+
+/*
+    +==============================================================================+
+    |   _   _      _                    __                  _   _                  |
+    |  | | | |    | |                  / _|                | | (_)                 |
+    |  | |_| | ___| |_ __   ___ _ __  | |_ _   _ _ __   ___| |_ _  ___  _ __  ___  |
+    |  |  _  |/ _ \ | '_ \ / _ \ '__| |  _| | | | '_ \ / __| __| |/ _ \| '_ \/ __| |
+    |  | | | |  __/ | |_) |  __/ |    | | | |_| | | | | (__| |_| | (_) | | | \__ \ |
+    |  \_| |_/\___|_| .__/ \___|_|    |_|  \__,_|_| |_|\___|\__|_|\___/|_| |_|___/ |
+    |               |_|                                                            |
+    |               | |                                                            |
+    +==============================================================================+
+
+*/
 
 #[cfg(debug_assertions)]
 pub fn is_debug() -> bool {
@@ -44,6 +62,27 @@ pub fn line_ending() -> String {
     "\r\n".to_owned()
 }
 
+pub fn char_width(chr: char, file_config: &FileConfig) -> Option<usize> {
+    if chr != '\t' {
+        chr.width()
+    }
+    else {
+        Some(file_config.tab_str.len())
+    }
+}
+
+/*
+    +=======================================================+
+    |  ___  ___      _         _____    _ _ _               |
+    |  |  \/  |     (_)       |  ___|  | (_) |              |
+    |  | .  . | __ _ _ _ __   | |__  __| |_| |_ ___  _ __   |
+    |  | |\/| |/ _` | | '_ \  |  __|/ _` | | __/ _ \| '__|  |
+    |  | |  | | (_| | | | | | | |__| (_| | | || (_) | |     |
+    |  \_|  |_/\__,_|_|_| |_| \____/\__,_|_|\__\___/|_|     |
+    |                                                       |
+    +=======================================================+
+*/
+
 impl Editor {
     pub fn start(mut self) -> Result<(), Box<dyn Error>> {
         std::io::stdout().execute(crossterm::terminal::EnterAlternateScreen)?;
@@ -56,19 +95,26 @@ impl Editor {
 
         let mut is_conhost = false;
 
+        // Redrawing unnecessarily is not only slow but in terminal environments can cause flickering
         let mut redraw;
+
+        // If any files are included open them
         if args.len() > 0 {
             self.open_doc = Some(0);
             for filename in args {
+                // Powershell supports VT100 but is considered a windows terminal by crossterm to the best of my knowledge so a few bugs pop up if this isn't used
                 if filename == "--powershell" {
                     is_conhost = true;
                 }
 
+                // Open the file if exists, if not make a new file
                 match Document::load(filename) {
                     Ok(doc) => self.add_doc(doc),
                     Err(filename) => self.add_doc(Document::new(filename))
                 }
             }
+
+            // Get the config info for the currently open file
             let config = 
                 if self.config.languages.contains_key(&self.docs[0].extension()) {
                     &self.config.languages[&self.docs[0].extension()]
@@ -77,7 +123,8 @@ impl Editor {
                     &self.config.languages[&"*".to_owned()]
                 };
 
-            self.docs[0].tokenize(0, self.height, config);
+            let h = self.height();
+            self.docs[0].tokenize(0, h, config);
             
             if !is_conhost {
                 print!("\x1B[?1000;1006;1015h"); // Enable for windows terminal cause the cfg based system switches to winapi calls
@@ -90,6 +137,7 @@ impl Editor {
                 std::io::stdout().flush().unwrap();
             }
 
+            // Display starting screen
             self.main_screen()?;
         }
 
@@ -103,14 +151,29 @@ impl Editor {
 
         let mut undergoing_selection = false;
 
+        let mut resize = Some((crossterm::terminal::size().unwrap().0 as usize, crossterm::terminal::size().unwrap().1 as usize));
+
+        // Diagnostic data
+        let mut avg_event_time = 0;
+        let mut event_samples = 0;
+
+        let mut avg_draw_time = 0;
+        let mut draw_samples = 0;
+        
         'editor: loop {
-            let (width, height) = (self.width() + 1,self.height());
+            if let Some((w, h)) = resize {
+                self.resize(w, h);
+                resize = None;
+            }
+
+            let (width, height) = (self.width(),self.height());
 
             if redraw {
                 print!("{}",crossterm::cursor::Hide);
                 print!("{}",crossterm::cursor::MoveTo(0,0));
                 std::io::stdout().flush().unwrap();
             }
+
 
             let num_docs = self.docs.len();
 
@@ -140,6 +203,8 @@ impl Editor {
                 let selection = self.docs[doc_index].selection.clone();
 
                 if redraw {
+                    let draw_time = SystemTime::now();
+
                     if self.docs[doc_index].selection.is_some() {
                         let s = self.docs[doc_index].selection.as_mut().unwrap();
 
@@ -161,15 +226,15 @@ impl Editor {
                         }
                         else if processing_row + line_start - 1 < self.docs[doc_index].rows.len() {
 
-                            if self.docs[doc_index].rows[processing_row - 1 + line_start].line_width() > width {
+                            if self.docs[doc_index].rows[processing_row - 1 + line_start].line_width(config) > width {
 
-                                let n = self.docs[doc_index].rows[processing_row - 1 + line_start].line_width() / width;
-                                let padding = width * (n + 1) - self.docs[doc_index].rows[processing_row - 1 + line_start].line_width();
+                                let n = self.docs[doc_index].rows[processing_row - 1 + line_start].line_width(config) / width;
+                                let padding = width * (n + 1) - self.docs[doc_index].rows[processing_row - 1 + line_start].line_width(config);
                                 println!("{}{}{}{}",self.docs[doc_index].rows[processing_row - 1 + line_start].display_buf(config, &self.config.theme), crossterm::style::SetBackgroundColor(Color::from(self.config.theme.background_color)),crossterm::style::SetForegroundColor(Color::from(self.config.theme.foreground_color))," ".repeat(padding));
                                 drawing_row += n;
                             }
                             else {
-                                let padding = width - self.docs[doc_index].rows[processing_row - 1 + line_start].line_width();
+                                let padding = width - self.docs[doc_index].rows[processing_row - 1 + line_start].line_width(config);
                                 println!("{}{}{}{}",self.docs[doc_index].rows[processing_row - 1 + line_start].display_buf(config, &self.config.theme),crossterm::style::SetBackgroundColor(Color::from(self.config.theme.background_color)),crossterm::style::SetForegroundColor(Color::from(self.config.theme.foreground_color))," ".repeat(padding));
                             }
                         }
@@ -182,8 +247,21 @@ impl Editor {
 
                     if clear {
                         clear = false;
-                        println!("~{}"," ".repeat(width - 1));
-                        println!("~{}"," ".repeat(width - 1));                        
+                        println!( "~{}"," ".repeat(width - 1));
+                        println!( "~{}"," ".repeat(width - 1));
+                    }
+
+                    std::io::stdout().flush()?;
+
+                    if let Ok(elapsed) = draw_time.elapsed() {
+                        if avg_draw_time == 0 {
+                            avg_draw_time = elapsed.as_micros();
+                            draw_samples += 1;
+                        }
+                        else {
+                            avg_draw_time = (avg_draw_time * draw_samples + elapsed.as_micros()) / (draw_samples + 1);
+                            draw_samples += 1;
+                        }
                     }
                 }
                 else {
@@ -206,193 +284,288 @@ impl Editor {
                     status_msg.clear();
                 }
 
-                {
-                    let doc = &mut self.docs[doc_index];
+                
+                macro_rules! save_file {
+                    () => {
+                        {
+                            self.docs[doc_index].save(config)?;
+                            self.docs[doc_index].dirty = 0;
+                            status_msg = format!("Saved file as {} in ",self.docs[doc_index].filename);
+                        }
+                    };
+                }
 
-                    if !mouse_event {
-                        Editor::position_cursor(doc.cursor_row,doc.cursor_col,&doc.rows,width,doc.line_start);
-                    }
-                    else {
-                        mouse_event = false;
-                    }
+                macro_rules! new_file {
+                    () => {
+                        if let Ok(filename) = &self.read_new_filename(None) {
+                            if !Path::new(&filename).exists() {
+                                self.open_doc = Some(self.docs.len());
+                                let mut doc = Document::new(filename.clone());
+                                doc.tokenize(0, height, config);
+                                self.add_doc(doc);
+                            }
+                            else {
+                                status_msg = format!("File {} already exists!",filename);
+                            }
+                            continue 'editor;
+                        }
+                    };
+                }
 
-                    match read().unwrap() {
+                macro_rules! open_file {
+                    () => {
+                        if let Ok(filename) = self.read_new_filename(None) {    
+                            match Document::load(filename) {
+                                Ok(mut doc) => {
+                                    self.open_doc = Some(self.docs.len());
+                                    doc.tokenize(0, height, config);
+                                    self.add_doc(doc);
+
+                                    continue 'editor;
+                                },
+                                Err(filename) => self.write_status_bar(Some(format!("File {} not found!",filename)))
+                            }
+                        }
+                    };
+                }
+
+                macro_rules! close_file {
+                    () => {
+                        if self.docs[doc_index].dirty == 0 {
+                            self.docs.remove(doc_index);
+                            if doc_index != 0 && doc_index - 1 < self.docs.len() {
+                                self.open_doc = Some(doc_index - 1);
+                            }
+                            else {
+                                self.open_doc = None;
+                                self.main_screen()?;
+                            }
+                            continue 'editor;
+                        }
+                        else {
+                            if self.show_prompt("You haven't saved this file!".to_owned(), "Close anways".to_owned(), "Don't close".to_owned()).is_ok() {
+                                self.docs.remove(doc_index);
+                                if doc_index != 0 && doc_index - 1 < self.docs.len() {
+                                    self.open_doc = Some(doc_index - 1);
+                                }
+                                else {
+                                    self.open_doc = None;
+                                    self.main_screen()?;
+                                }
+                                continue 'editor;
+                            }
+                        }
+                    };
+                }
+
+                macro_rules! process_command {
+                    () => {
+                        if let Ok(mut command) = self.read_new_filename(Some("j".to_owned())) {
+                            if command.starts_with('j') {
+                                command.drain(..1);
+                                if let Ok(line) = command.parse::<usize>() {
+                                    if line < self.docs[doc_index].rows.len() {
+                                        self.docs[doc_index].line_start = line;
+                                        self.docs[doc_index].cursor_row = line;
+                                        self.docs[doc_index].cursor_col = 0;
+                                    }
+                                }
+                            }
+                            else if command.starts_with("cd") {
+                                command.drain(..2);
+                                let mut dir = std::env::current_dir().unwrap();
+                                if command.trim() == ".." {
+                                    if dir.pop() {
+                                        std::env::set_current_dir(dir)?;
+                                    }
+                                }
+                                else {
+                                    dir.push(command.trim());
+                                    if dir.exists() {
+                                        std::env::set_current_dir(dir)?;
+                                    }
+                                }
+                            }
+                        }
+                    };
+                }
+
+                macro_rules! undo_last {
+                    () => {
+                        if let Some(history_index) = self.docs[doc_index].history_index {
+                            if history_index < self.docs[doc_index].history.len() {
+                                let action = self.docs[doc_index].history[history_index].clone();
+                                let (x,y) = action.apply(&mut self.docs[doc_index].rows, UndoRedo::Undo);
+
+                                if history_index == 0 {
+                                    self.docs[doc_index].history_index = None;
+                                }
+                                else {
+                                    *self.docs[doc_index].history_index.as_mut().unwrap() -= 1;
+                                }
+                                self.docs[doc_index].cursor_col = x;
+                                self.docs[doc_index].cursor_row = y;
+                            }
+                        }
+                    };
+                }
+
+                macro_rules! redo_last {
+                    () => {
+                        if let Some(history_index) = self.docs[doc_index].history_index {
+                            if history_index + 1 < self.docs[doc_index].history.len() {
+                                let action = self.docs[doc_index].history[history_index + 1].clone();
+                                let (x,y) = action.apply(&mut self.docs[doc_index].rows, UndoRedo::Redo);
+                                *self.docs[doc_index].history_index.as_mut().unwrap() += 1;
+                                self.docs[doc_index].cursor_col = x;
+                                self.docs[doc_index].cursor_row = y;
+                            }
+                        }
+                        else if self.docs[doc_index].history.len() > 0 {
+                            status_msg = format!("{:?}", self.docs[doc_index].history[0]);
+
+                            let action = self.docs[doc_index].history[0].clone();
+                            let (x,y) = action.apply(&mut self.docs[doc_index].rows, UndoRedo::Redo);
+                            self.docs[doc_index].history_index = Some(0);
+                            self.docs[doc_index].cursor_col = x;
+                            self.docs[doc_index].cursor_row = y;
+                        }
+                    };
+                }
+
+                macro_rules! copy_selection {
+                    () => {
+                        if let Some(sel) = self.docs[doc_index].selection {
+                            let mut selection_string = String::new();
+                            if sel.start_row == sel.end_row {
+                                let start = std::cmp::min(sel.start_col,sel.end_col);
+                                let end = std::cmp::max(sel.start_col,sel.end_col);
+
+                                selection_string = self.docs[doc_index].rows[sel.start_row].substring(start, end).to_string();
+                            }
+                            else {
+                                let start = std::cmp::min(sel.start_row,sel.end_row);
+                                let end = std::cmp::max(sel.start_row,sel.end_row);
+                                let start_col = if sel.start_row == start { sel.start_col } else { sel.end_col };
+                                let end_col = if sel.end_col == end { sel.end_col } else { sel.start_col };
+
+
+                                for i in start..=end {
+                                    if i == start {
+                                        selection_string.push_str(&format!("{}{}",self.docs[doc_index].rows[i].substring(start_col, self.docs[doc_index].rows[i].len()),line_ending()))
+                                    }
+                                    else if i == end {
+                                        selection_string.push_str(self.docs[doc_index].rows[i].substring(0, end_col));
+                                    }
+                                    else {
+                                        selection_string.push_str(&format!("{}{}",self.docs[doc_index].rows[i].buf, line_ending()));
+                                    }
+                                }
+                            }
+
+                            undergoing_selection = true;
+
+                            let mut ctx: ClipboardContext = ClipboardProvider::new().unwrap();
+                            ctx.set_contents(selection_string)?;
+                        }
+                    };
+                }
+
+                macro_rules! paste_clip {
+                    () => {
+                        {
+                            let mut ctx: ClipboardContext = ClipboardProvider::new().unwrap();
+                            if let Ok(clipboard_contents) = ctx.get_contents() {
+                                let mut i = 0;
+                                let line_count = clipboard_contents.lines().count();
+                                for line in clipboard_contents.lines() {
+                                    let row = self.docs[doc_index].cursor_row;
+                                    for c in line.chars() {
+                                        let col = self.docs[doc_index].cursor_col;
+
+                                        self.docs[doc_index].dirty += 1;
+                                        self.docs[doc_index].rows[row].insert_char(col, c);
+                                        self.docs[doc_index].add_diff(EditDiff::InsertChar(col, row, c));
+
+                                        self.docs[doc_index].cursor_col += 1;
+                                    }
+
+                                    if i + 1 < line_count {
+                                        self.docs[doc_index].rows.insert(row + 1, Row::empty());
+                                        self.docs[doc_index].cursor_row += 1;
+                                        self.docs[doc_index].cursor_col = 0;
+                                    }
+
+                                    i += 1;
+                                }
+                            }
+                        }
+                    };
+                }                
+
+                if !mouse_event {
+                    Editor::position_cursor(self.docs[doc_index].cursor_row,self.docs[doc_index].cursor_col,&self.docs[doc_index].rows,width,self.docs[doc_index].line_start, config);
+                }
+                else {
+                    mouse_event = false;
+                }
+
+                let event = read().unwrap();
+                let mut process_event = true;
+
+                if let crossterm::event::Event::Key(k) = event {
+                    for (name, keybound_event) in &self.config.keybinds {
+                        if keybound_event.equals(&k) {
+                            match &name[..] {
+                                "copy" => copy_selection!(),
+                                "paste" => paste_clip!(),
+                                "redo" => redo_last!(),
+                                "undo" => undo_last!(),
+                                "start_command" => process_command!(),
+                                "close_file" => close_file!(),
+                                "open_file" => open_file!(),
+                                "save_file" => save_file!(),
+                                "new_file" => new_file!(),
+                                _ => {}
+                            }
+                            process_event = false;
+                        }
+                    }
+                }
+
+                let doc = &mut self.docs[doc_index];
+
+                let time = SystemTime::now();
+                if process_event {
+                    match event {
                         Key(k) => {
+
                             match k.code {
                                 KeyCode::Char(c) => {
-                                    if k.modifiers.contains(KeyModifiers::CONTROL) {
-                                        if c == 's' {
-                                            doc.save(config)?;
-                                            doc.dirty = 0;
-                                            status_msg = format!("Saved file as {} in ",doc.filename);
-                                        }
-                                        else if c == 'n' {
-                                            if let Ok(filename) = self.read_new_filename(None) {
-                                                if !Path::new(&filename).exists() {
-                                                    self.open_doc = Some(self.docs.len());
-                                                    let mut doc = Document::new(filename);
-                                                    doc.tokenize(0, height, config);
-                                                    self.add_doc(doc);
-                                                }
-                                                else {
-                                                    status_msg = format!("File {} already exists!",filename);
-                                                }
-                                                continue 'editor;
-                                            }
-                                        }
-                                        else if c == 'o' {
-                                            if let Ok(filename) = self.read_new_filename(None) {    
-                                                match Document::load(filename) {
-                                                    Ok(mut doc) => {
-                                                        self.open_doc = Some(self.docs.len());
-                                                        doc.tokenize(0, height, config);
-                                                        self.add_doc(doc);
-
-                                                        continue 'editor;
-                                                    },
-                                                    Err(filename) => self.write_status_bar(Some(format!("File {} not found!",filename)))
-                                                }
-                                            }
-                                        }
-                                        else if c == 'w' {
-                                            self.docs.remove(doc_index);
-                                            if doc_index != 0 && doc_index - 1 < self.docs.len() {
-                                                self.open_doc = Some(doc_index - 1);
-                                            }
-                                            else {
-                                                self.open_doc = None;
-                                                self.main_screen()?;
-                                            }
-                                            continue 'editor;
-                                        }
-                                        else if c == 'g' {
-                                            if let Ok(mut command) = self.read_new_filename(Some("j".to_owned())) {
-                                                if command.starts_with('j') {
-                                                    command.drain(..1);
-                                                    if let Ok(line) = command.parse::<usize>() {
-                                                        if line < self.docs[doc_index].rows.len() {
-                                                            self.docs[doc_index].line_start = line;
-                                                            self.docs[doc_index].cursor_row = line;
-                                                            self.docs[doc_index].cursor_col = 0;
-                                                        }
-                                                    }
-                                                }
-                                                else if command.starts_with("cd") {
-                                                    command.drain(..2);
-                                                    let mut dir = std::env::current_dir().unwrap();
-                                                    if command.trim() == ".." {
-                                                        if dir.pop() {
-                                                            std::env::set_current_dir(dir)?;
-                                                        }
-                                                    }
-                                                    else {
-                                                        dir.push(command.trim());
-                                                        if dir.exists() {
-                                                            std::env::set_current_dir(dir)?;
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        else if c == 'z' {
-                                            if let Some(history_index) = doc.history_index {
-                                                if history_index < doc.history.len() {
-                                                    let (x,y) = doc.history[history_index].apply(&mut doc.rows, UndoRedo::Undo);
-
-                                                    if history_index == 0 {
-                                                        doc.history_index = None;
-                                                    }
-                                                    else {
-                                                        *doc.history_index.as_mut().unwrap() -= 1;
-                                                    }
-                                                    doc.cursor_col = x;
-                                                    doc.cursor_row = y;
-                                                }
-                                            }
-                                        }
-                                        else if c == 'y' {
-                                            if let Some(history_index) = doc.history_index {
-                                                if history_index + 1 < doc.history.len() {
-                                                    let (x,y) = doc.history[history_index + 1].apply(&mut doc.rows, UndoRedo::Redo);
-                                                    *doc.history_index.as_mut().unwrap() += 1;
-                                                    doc.cursor_col = x;
-                                                    doc.cursor_row = y;
-                                                }
-                                            }
-                                            else if doc.history.len() > 0 {
-                                                status_msg = format!("{:?}", doc.history[0]);
-                                                let (x,y) = doc.history[0].apply(&mut doc.rows, UndoRedo::Redo);
-                                                doc.history_index = Some(0);
-                                                doc.cursor_col = x;
-                                                doc.cursor_row = y;
-                                            }
-                                        }
-                                        else if c == 'c' {
-                                            if let Some(sel) = doc.selection {
-                                                let mut selection_string = String::new();
-                                                if sel.start_row == sel.end_row {
-                                                    let start = std::cmp::min(sel.start_col,sel.end_col);
-                                                    let end = std::cmp::max(sel.start_col,sel.end_col);
-
-                                                    selection_string = doc.rows[sel.start_row].substring(start, end).to_string();
-                                                }
-                                                else {
-                                                    let start = std::cmp::min(sel.start_row,sel.end_row);
-                                                    let end = std::cmp::max(sel.start_row,sel.end_row);
-                                                    let start_col = if sel.start_row == start { sel.start_col } else { sel.end_col };
-                                                    let end_col = if sel.end_col == end { sel.end_col } else { sel.start_col };
-
-
-                                                    for i in start..=end {
-                                                        if i == start {
-                                                            selection_string.push_str(&format!("{}{}",doc.rows[i].substring(start_col, doc.rows[i].len()),line_ending()))
-                                                        }
-                                                        else if i == end {
-                                                            selection_string.push_str(doc.rows[i].substring(0, end_col));
-                                                        }
-                                                        else {
-                                                            selection_string.push_str(&format!("{}{}",doc.rows[i].buf, line_ending()));
-                                                        }
-                                                    }
-                                                }
-
-                                                undergoing_selection = true;
-
-                                                let mut ctx: ClipboardContext = ClipboardProvider::new().unwrap();
-                                                ctx.set_contents(selection_string)?;
-                                            }
-                                        }
-                                        else if c == 'v' {
-                                            let mut ctx: ClipboardContext = ClipboardProvider::new().unwrap();
-                                            if let Ok(clipboard_contents) = ctx.get_contents() {
-                                                let mut i = 0;
-                                                let line_count = clipboard_contents.lines().count();
-                                                for line in clipboard_contents.lines() {
-                                                    for c in line.chars() {
-                                                        doc.dirty += 1;
-                                                        doc.rows[doc.cursor_row].insert_char(doc.cursor_col, c);
-                                                        doc.add_diff(EditDiff::InsertChar(doc.cursor_col, doc.cursor_row, c));
-
-                                                        doc.cursor_col += 1;
-                                                    }
-
-                                                    if i + 1 < line_count {
-                                                        doc.rows.insert(doc.cursor_row + 1, Row::empty());
-                                                        doc.cursor_row += 1;
-                                                        doc.cursor_col = 0;
-                                                    }
-
-                                                    i += 1;
-                                                }
+                                    if doc.cursor_col != 0 {
+                                        let last_chr = doc.rows[doc.cursor_row].char_at(doc.cursor_col - 1);
+                                        if config.auto_close.contains_key(&last_chr) {
+                                            if c == config.auto_close[&last_chr] && doc.to_auto_close {
+                                                doc.cursor_col += 1;
+                                                continue;
                                             }
                                         }
                                     }
-                                    else {
-                                        doc.dirty += 1;
-                                        doc.rows[doc.cursor_row].insert_char(doc.cursor_col, c);
-                                        doc.add_diff(EditDiff::InsertChar(doc.cursor_col, doc.cursor_row, c));
 
-                                        doc.cursor_col += 1;
+                                    doc.to_auto_close = false;
+
+                                    doc.dirty += 1;
+                                    doc.rows[doc.cursor_row].insert_char(doc.cursor_col, c);
+                                    doc.add_diff(EditDiff::InsertChar(doc.cursor_col, doc.cursor_row, c));
+
+                                    doc.cursor_col += 1;
+
+                                    if config.auto_close.contains_key(&c) {
+                                        doc.dirty += 1;
+                                        doc.rows[doc.cursor_row].insert_char(doc.cursor_col, config.auto_close[&c]);
+                                        doc.add_diff(EditDiff::InsertChar(doc.cursor_col, doc.cursor_row, config.auto_close[&c]));
+
+                                        doc.to_auto_close = true;
                                     }
                                 },
                                 KeyCode::Esc => break,
@@ -531,7 +704,7 @@ impl Editor {
                                     let cursor_row = doc.cursor_row;
                                     let cursor_col = doc.cursor_col;
 
-                                    if doc.rows[doc.cursor_row].line_width() > width && doc.cursor_col > width {
+                                    if doc.rows[doc.cursor_row].line_width(config) > width && doc.cursor_col > width {
                                         doc.cursor_col -= width;
                                     }
                                     else {
@@ -562,7 +735,7 @@ impl Editor {
                                     let cursor_row = doc.cursor_row;
                                     let cursor_col = doc.cursor_col;
 
-                                    if doc.rows[doc.cursor_row].line_width() > width {
+                                    if doc.rows[doc.cursor_row].line_width(config) > width {
                                         doc.cursor_col += width;
                                         if doc.cursor_col > doc.rows[doc.cursor_row].len() {
                                             doc.cursor_col = doc.cursor_col % width;
@@ -708,7 +881,7 @@ impl Editor {
                             };
                         },
                         Resize(w,h) => {
-                            self.resize(w as usize, h as usize);
+                            resize = Some((w as usize, h as usize));
 
                             clear = true;
                         },
@@ -732,7 +905,7 @@ impl Editor {
                                     else {
                                         doc.cursor_col = doc.rows[doc.cursor_row].len();
                                     }
-                                    Editor::position_cursor(doc.cursor_row,doc.cursor_col,&doc.rows,width,doc.line_start);
+                                    Editor::position_cursor(doc.cursor_row,doc.cursor_col,&doc.rows,width,doc.line_start, config);
                                 }
                                 else {
                                     for (i,doc_index) in self.docs_mouse_cache.iter().enumerate() {
@@ -773,8 +946,6 @@ impl Editor {
                                 }
                             } 
                             else if e.kind == crossterm::event::MouseEventKind::Moved {
-                                self.refresh_mouse_cache();
-
                                 for (i,doc_index) in self.docs_mouse_cache.iter().enumerate() {
                                     self.docs[i].show_close = false;
                                     if e.column > doc_index.0 as u16 && e.column < doc_index.1 as u16 {
@@ -788,8 +959,20 @@ impl Editor {
                     }
                 }
 
+                if let Ok(elapsed) = time.elapsed() {
+                    if avg_event_time == 0 {
+                        avg_event_time = elapsed.as_micros();
+                        event_samples += 1;
+                    }
+                    else {
+                        avg_event_time = (avg_event_time * event_samples + elapsed.as_micros()) / (event_samples + 1);
+                        event_samples += 1;
+                    }
+                }
+                
+
                 let actual_rows = height as i32 - 3;
-                let diff = self.docs[doc_index].visual_rows_to(width, self.docs[doc_index].cursor_row) as i32 - self.docs[doc_index].visual_rows_to(width, self.docs[doc_index].line_start) as i32;
+                let diff = self.docs[doc_index].visual_rows_to(width, self.docs[doc_index].cursor_row, config) as i32 - self.docs[doc_index].visual_rows_to(width, self.docs[doc_index].line_start, config) as i32;
                 if diff >= actual_rows {
                     self.docs[doc_index].line_start += 1;
                     redraw = true;
@@ -811,12 +994,24 @@ impl Editor {
 
         config_file.write_all(serde_json::to_string_pretty(&self.config)?.as_bytes())?;
         
-        std::io::stdout().execute(crossterm::event::DisableMouseCapture)?.execute(crossterm::terminal::Clear(crossterm::terminal::ClearType::All))?.execute(crossterm::cursor::MoveTo(0,0))?;
         print!("\x1B[?1000;1006;1015l");
         std::io::stdout().flush().unwrap();
         crossterm::terminal::disable_raw_mode()?;
 
         std::io::stdout().execute(crossterm::terminal::LeaveAlternateScreen)?;
+
+        
+        if is_debug() {
+            println!();
+            println!();
+            println!("+================================================+");
+            println!("Average event handling time: {} micro seconds", avg_event_time);
+            println!("Average draw time: {} micro seconds", avg_draw_time);
+            println!("+================================================+");
+            println!();
+            println!();
+        }
+
 
         Ok(())
     }
@@ -863,7 +1058,7 @@ impl Editor {
                                     };
 
                                 self.open_doc = Some(self.docs.len());
-                                doc.tokenize(0, self.height, config);
+                                doc.tokenize(0, self.height(), config);
 
                                 self.add_doc(doc);
                                 return Ok(());
@@ -949,10 +1144,11 @@ impl Editor {
     }
 
     fn draw_tabs(&self) {
-        let width = self.width();
+        let width = crossterm::terminal::size().unwrap().0 as usize;
 
         let mut doc_bar = String::new();
 
+        let mut len = 0;
         let mut i = 0;
         for doc in &self.docs {
             if doc_bar.len() + doc.filename.len() + 3 < width {
@@ -963,6 +1159,7 @@ impl Editor {
                     else {
                         ""
                     });
+                len += tab_str.width() + 3;
                 if let Some(open_doc) = self.open_doc {
                     if open_doc == i {
                         doc_bar.push_str(&format!("{}|{}|{}{}{} ",crossterm::style::Attribute::Reverse, tab_str, crossterm::style::Attribute::Reset, crossterm::style::SetBackgroundColor(Color::from(self.config.theme.background_color)),crossterm::style::SetForegroundColor(Color::from(self.config.theme.foreground_color))));
@@ -975,7 +1172,9 @@ impl Editor {
             i += 1;
         }
 
-        print!("{}{}{}{}{}",crossterm::cursor::MoveTo(0,0),doc_bar.trim(),crossterm::style::SetBackgroundColor(Color::from(self.config.theme.background_color)),crossterm::style::SetForegroundColor(Color::from(self.config.theme.foreground_color))," ".repeat(width - doc_bar.len()));
+        len -= 1;
+
+        print!("{}{}{}{}{}",crossterm::cursor::MoveTo(0,0),doc_bar.trim(),crossterm::style::SetBackgroundColor(Color::from(self.config.theme.background_color)),crossterm::style::SetForegroundColor(Color::from(self.config.theme.foreground_color))," ".repeat(width - len));
     }
 
     fn read_new_filename(&self, filename_def: Option<String>) -> Result<String, Box<dyn Error>> {
@@ -1001,7 +1200,7 @@ impl Editor {
                 status_str.insert_str(0,"[...");
             }
     
-            print!("{}{}{}{}{}{}",crossterm::cursor::MoveTo(0,height as u16 - 2),crossterm::style::Attribute::Reverse,status_str," ".repeat(width as usize - status_str.len() - dir.len()),dir,crossterm::style::Attribute::Reset);
+            print!("{}{}{}{}{}{}{}{}",crossterm::cursor::MoveTo(0,height as u16 - 2),crossterm::style::SetForegroundColor(Color::from(self.config.theme.background_color)),crossterm::style::SetBackgroundColor(Color::from(self.config.theme.foreground_color)),status_str," ".repeat(width as usize - status_str.len() - dir.len()),dir,crossterm::style::SetBackgroundColor(Color::from(self.config.theme.background_color)),crossterm::style::SetForegroundColor(Color::from(self.config.theme.foreground_color)));
     
             std::io::stdout().flush().unwrap();
 
@@ -1022,6 +1221,79 @@ impl Editor {
         }
 
         Ok(filename)
+    }
+
+    fn show_prompt(&self, msg: String, ok_msg: String, err_msg: String) -> Result<(),()> {
+        print!("{}", crossterm::cursor::Hide);
+
+        let max_len = self.width() / 3 - 2;
+
+        let mut msg_lines = Vec::with_capacity(msg.width() / max_len + 1);
+
+        let mut start = 0;
+        let mut end = std::cmp::min(msg.len(), max_len);
+        loop {
+            msg_lines.push(&msg[start..end]);
+
+            start += end;
+            end += max_len;
+
+            if start >= msg.len() {
+                break;
+            }
+            
+            end = std::cmp::min(end, msg.len());
+        }
+
+        let len = max_len + 2;
+        let mut offset = 0;
+
+        print!("{}{}{}+{}+",crossterm::style::SetBackgroundColor(Color::from(self.config.theme.foreground_color)),crossterm::style::SetForegroundColor(Color::from(self.config.theme.background_color)),crossterm::cursor::MoveTo((self.width() / 2 - len / 2 - 1) as u16, (self.height() / 2) as u16 - 2 + offset), "=".repeat(len - 2));
+        offset += 1;
+        print!("{}|{}|",crossterm::cursor::MoveTo((self.width() / 2 - len / 2 - 1) as u16, (self.height() / 2) as u16 - 2 + offset), pad_center("WARNING".to_owned(), len - 2));
+        offset += 1;
+
+        for m in msg_lines {
+            print!("{}|{}|",crossterm::cursor::MoveTo((self.width() / 2 - len / 2 - 1) as u16, (self.height() / 2) as u16 - 2 + offset), pad_center_str(m, len - 2));
+            offset += 1;
+        }
+        
+        print!("{}|{}|",crossterm::cursor::MoveTo((self.width() / 2 - len / 2 - 1) as u16, (self.height() / 2) as u16 - 2 + offset), " ".repeat(len - 2));
+        offset += 1;
+        print!("{}|{}|",crossterm::cursor::MoveTo((self.width() / 2 - len / 2 - 1) as u16, (self.height() / 2) as u16 - 2 + offset), " ".repeat(len - 2));
+        offset += 1;
+
+        print!("{}|{}{}{}|",crossterm::cursor::MoveTo((self.width() / 2 - len / 2 - 1) as u16, (self.height() / 2) as u16 - 2 + offset), ok_msg, " ".repeat(len - ok_msg.len() - err_msg.len() - 2), err_msg);
+        offset += 1;
+        print!("{}+{}+", crossterm::cursor::MoveTo((self.width() / 2 - len / 2 - 1) as u16, (self.height() / 2) as u16 - 2 + offset), "=".repeat(len - 2));
+        std::io::stdout().flush().unwrap();
+        offset -= 1;
+        
+        loop {
+            match read().unwrap() {
+                Mouse(m) => {
+                    if let MouseEventKind::Down(button) = m.kind {
+                        if button == MouseButton::Left {
+                            if m.row == (self.height() / 2) as u16 - 2 + offset && m.column > (self.width() / 2 - len / 2) as u16 && m.column < (self.width() / 2 - len / 2 + ok_msg.len()) as u16 {
+                                print!("{}", crossterm::cursor::Show);
+                                return Ok(())
+                            }
+                            else if m.row == (self.height() / 2) as u16 - 2 + offset && m.column < (self.width() / 2 + len / 2) as u16 && m.column > (self.width() / 2 + len / 2 - err_msg.len()) as u16 {
+                                print!("{}", crossterm::cursor::Show);
+                                return Err(())
+                            }
+                        }
+                    }
+                },
+                Key(e) => {
+                    if e.code == KeyCode::Esc {
+                        return Err(());
+                    }
+                },
+                _ => {}
+            }
+        }
+    
     }
 
     pub fn show_start_splash(&self) -> Result<(), Box<dyn Error>> {

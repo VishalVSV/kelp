@@ -1,4 +1,4 @@
-use crate::editor::Editor;
+use crate::editor::prelude::Editor;
 
 mod editor;
 

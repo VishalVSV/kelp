@@ -1,7 +1,7 @@
+use crate::editor::editor::debug_file;
+use crate::editor::editor::is_debug;
 use crossterm::style::Color;
-use crate::editor::HighlightingInfo;
-use crate::editor::Row;
-use crate::editor::FileConfig;
+use crate::editor::prelude::*;
 use core::ops::Range;
 
 #[allow(dead_code)]
@@ -62,24 +62,36 @@ impl Token {
                     if !odd_token.is_empty() {
                         if odd_token.ends_with(&config.line_comment_start) {
                             if odd_token.len() > config.line_comment_start.len() {
-                                res.push(Token::Plain(i - odd_token.len()..i - config.line_comment_start.len()));
+                                res.push(Token::Plain(from_char!(i) - odd_token.len()..from_char!(i) - config.line_comment_start.len()));
                             }
-                            res.push(Token::Comment(i - config.line_comment_start.len()..src.len()));
+                            res.push(Token::Comment(from_char!(i) - config.line_comment_start.len()..src.len()));
                             odd_token.clear();
                             break;
                         }
                         else {
-                            res.push(Token::Plain(i - odd_token.len()..i));
+                            res.push(Token::Plain(from_char!(i) - odd_token.len()..from_char!(i)));
                         }
     
                         odd_token.clear();
                     }
     
                     let mut len = 1;
+                    let mut is_escaped = false;
                     i += 1;
-                    while i < char_indices.len() && char_indices[i].1 != $c {
+                    while i < char_indices.len() && (char_indices[i].1 != $c || is_escaped) {
+                        if i < char_indices.len() && char_indices[i].1 == '\\' {
+                            if i + 2 <= char_indices.len() {
+                                res.push(Token::CustomStyle(from_char!(i)..from_char!(i + 2), format!("{}{}",Token::String(0..0).get_style(config),crossterm::style::Attribute::Dim)));
+                            }
+                            is_escaped = true;
+                        }
+                        else {
+                            is_escaped = false;
+                        }
+
                         len += 1;
                         i += 1;
+
                     }
     
                     if i < char_indices.len() {
@@ -90,7 +102,7 @@ impl Token {
                         parser = Some(TokenizerAction::ParseString($c));
                     }
     
-                    res.push(Token::String(i - len..i));
+                    res.push(Token::String(from_char!(i - len)..from_char!(i)));
                     
                     i -= 1;
                             
@@ -122,8 +134,16 @@ impl Token {
 
             macro_rules! handle_odd_token {
                 () => {
-                    if !odd_token.is_empty() && odd_token.len() <= i {
-                        res.push(Token::Plain(i - odd_token.len()..i));
+                    if !odd_token.is_empty() {
+                    
+                        let li = if i >= char_indices.len() {
+                            src.len()
+                        }
+                        else {
+                            char_indices[i].0
+                        };
+                    
+                        res.push(Token::Plain(li - odd_token.len()..li));
                         odd_token.clear();
                     }
                 };
@@ -156,29 +176,42 @@ impl Token {
                 };
             }
             
+            macro_rules! from_char {
+                ($i: expr) => {
+                    if $i < char_indices.len() {
+                        char_indices[$i].0
+                    }
+                    else if $i == char_indices.len() {
+                        src.len()
+                    }
+                    else {
+                        panic!("{} out of bounds...", $i)
+                    }
+                };
+            }
             
             if let Some(selection) = &selection {
                 if row_index >= selection.start_row && row_index <= selection.end_row {
                     if selection.start_row != selection.end_row {
                         if row_index == selection.start_row {
-                            res.push(Token::Selection(i..src.len()));                            
+                            res.push(Token::Selection(from_char!(i)..src.len()));
                         }
                         else if row_index == selection.end_row {
-                            res.push(Token::Selection(0..selection.end_col));
+                            res.push(Token::Selection(0..from_char!(selection.end_col)));
                         }
                         else {
-                            res.push(Token::Selection(i..src.len()));
+                            res.push(Token::Selection(from_char!(i)..src.len()));
                         }
                     }
                     else {
-                        res.push(Token::Selection(selection.start_col..selection.end_col));
+                        res.push(Token::Selection(from_char!(selection.start_col)..from_char!(selection.end_col)));
                     }
                 }
             }
 
             if config.syntax_highlighting_disabled {
                 res.push(Token::Plain(0..src.len()));
-                Token::normalize(&mut res, src.len(), config);
+                Token::normalize(&mut res, src.len(), config, src.to_string());
                 row.tokens = res;
                 continue;
             }
@@ -187,14 +220,25 @@ impl Token {
                 match p {
                     TokenizerAction::ParseString(c) => {
                         let mut len = 0;
-                        while i < char_indices.len() && char_indices[i].1 != *c {
+                        let mut is_escaped = false;
+                        while i < char_indices.len() && (char_indices[i].1 != *c || is_escaped) {
+                            if i < char_indices.len() && char_indices[i].1 == '\\' {
+                                if i + 2 <= char_indices.len() {
+                                    res.push(Token::CustomStyle(from_char!(i)..from_char!(i + 2), format!("{}{}",Token::String(0..0).get_style(config),crossterm::style::Attribute::Dim)));
+                                }
+                                is_escaped = true;
+                            }
+                            else {
+                                is_escaped = false;
+                            }
+
                             i += 1;
                             len += 1;
                         }
                         if i != char_indices.len() {
                             len += 1;
                             i += 1;
-                            res.push(Token::String(i - len..i));
+                            res.push(Token::String(from_char!(i - len)..from_char!(i)));
                             parser = None;
                         }
                         else {
@@ -211,14 +255,12 @@ impl Token {
                             len += config.multi_line_comment.1.chars().count();
                             i += config.multi_line_comment.1.chars().count();
 
-                            res.push(Token::Comment(i - len..i));
+                            res.push(Token::Comment(from_char!(i - len)..from_char!(i)));
                             parser = None;
                         }
                         else {
                             res.push(Token::Comment(0..src.len()));
                         }
-
-                        i = 0;
                     }
                 }
             }
@@ -235,16 +277,16 @@ impl Token {
     
                     if len != 0 {
                         if i < char_indices.len() && char_indices[i].1 == '(' {
-                            res.push(Token::FnCall(i - len..i));
+                            res.push(Token::FnCall(from_char!(i - len)..from_char!(i)));
                         }
                         else if i < char_indices.len() && char_indices[i].1 == '!' {
-                            res.push(Token::Macro(i - len..i));
+                            res.push(Token::Macro(from_char!(i - len)..from_char!(i)));
                         }
-                        else if config.keywords.contains(&src[i - len..i].to_owned()) {
-                            res.push(Token::Keyword(i - len..i));
+                        else if config.keywords.contains(&src[from_char!(i - len)..from_char!(i)].to_owned()) {
+                            res.push(Token::Keyword(from_char!(i - len)..from_char!(i)));
                         }
                         else {
-                            res.push(Token::Identifier(i - len..i));
+                            res.push(Token::Identifier(from_char!(i - len)..from_char!(i)));
                         }
         
                         
@@ -266,7 +308,7 @@ impl Token {
                         i += 1;
                     }
     
-                    res.push(Token::Number(i - len..i));
+                    res.push(Token::Number(from_char!(i - len)..from_char!(i)));
                     
                     if i != char_indices.len() {
                         i -= 1;
@@ -275,13 +317,13 @@ impl Token {
                 else if string_match!(config.line_comment_start) {
                     handle_odd_token!();
                     
-                    res.push(Token::Comment(i..src.len()));
-                    i += config.line_comment_start.len();
+                    res.push(Token::Comment(from_char!(i)..src.len()));
+                    i = src.len();
                 }
                 else if string_match!(config.multi_line_comment.0) {
                     handle_odd_token!();
-                    let mut len = 1;
-                    i += 1;
+                    let mut len = config.multi_line_comment.0.len();
+                    i += config.multi_line_comment.0.len();
                     while i < char_indices.len() && !string_match!(config.multi_line_comment.1) {
                         i += 1;
                         len += 1;
@@ -292,14 +334,15 @@ impl Token {
                         i += line_ender_len;
                         len += line_ender_len;
 
-                        res.push(Token::Comment(i - len..i));
+                        res.push(Token::Comment(from_char!(i - len)..from_char!(i)));
 
-                        i -= len;
+                        if i < char_indices.len() {
+                            i -= 1;
+                        }
                     }
                     else {
-                        res.push(Token::Comment(i - len..i));
+                        res.push(Token::Comment(from_char!(i - len)..from_char!(i)));
                         parser = Some(TokenizerAction::ParseComment);
-                        i -= len;
                     }
                 }
                 else if char_indices[i].1 == '"' {
@@ -325,12 +368,13 @@ impl Token {
             }
             handle_odd_token!();
             
-            Token::normalize(&mut res, src.len(), config);
+            Token::normalize(&mut res, src.len(), config, src.to_string());
             row.tokens = res;
         }
     }
 
-    pub fn normalize(tokens: &mut Vec<Token>, len: usize, _config: &FileConfig) {
+    pub fn normalize(tokens: &mut Vec<Token>, len: usize, _config: &FileConfig, src: String) {
+
         if tokens.len() == 0 || len == 0 {
             return;
         }
@@ -352,7 +396,7 @@ impl Token {
             }
         }
 
-        let mut res = Vec::new();
+        let mut res = Vec::with_capacity(tokens.len());
 
         let mut start = 0;
         let mut i_outer = 0;
@@ -380,10 +424,24 @@ impl Token {
             }
         }
 
-        
-        res.push(tokens[token_id_outer as usize].clone());
-        let l = res.len();
-        *res[l - 1].get_range_mut() = start..i_outer + 1;
+        if token_id_outer != -1 {
+            res.push(tokens[token_id_outer as usize].clone());
+            let l = res.len();
+            *res[l - 1].get_range_mut() = start..i_outer + 1;
+        }
+        else {
+            panic!("{:?} {:?} {:?}", tokens, res, normalizing_line);
+        }
+
+        if is_debug() {
+            let mut d = String::new();
+
+            for t in &res {
+                d.push_str(&format!("{}|", &src[t.get_range().start..t.get_range().end]));
+            }
+
+            std::fs::write(debug_file(), format!("{}\n{:?}\n{:?}",d, res, tokens).as_bytes()).unwrap();
+        }
 
         *tokens = res;
     }
@@ -456,6 +514,7 @@ impl Token {
         let fncall = config.syntax_colors.get(&"fncall".to_owned()).unwrap_or(&(255,255,255));
         let macro_ = config.syntax_colors.get(&"macro".to_owned()).unwrap_or(&(255,255,255));
         let number = config.syntax_colors.get(&"number".to_owned()).unwrap_or(&(255,255,255));
+        let selection = config.syntax_colors.get(&"selection".to_owned()).unwrap_or(&(0,0,255));
 
         match self {
             Token::Identifier(_) => {
@@ -471,7 +530,7 @@ impl Token {
                 String::new()
             },
             Token::Comment(_) => {
-                format!("{}",crossterm::style::SetForegroundColor(Color::from(*comment)))
+                format!("{}{}", crossterm::style::Attribute::Italic, crossterm::style::SetForegroundColor(Color::from(*comment)))
             },
             Token::FnCall(_) => {
                 format!("{}",crossterm::style::SetForegroundColor(Color::from(*fncall)))
@@ -483,7 +542,7 @@ impl Token {
                 format!("{}",crossterm::style::SetForegroundColor(Color::from(*number)))
             },
             Token::Selection(_) => {
-                format!("{}",crossterm::style::SetBackgroundColor(Color::Blue))
+                format!("{}",crossterm::style::SetBackgroundColor(Color::from(*selection)))
             },
             Token::CustomStyle(_, s) => {
                 s.clone()
