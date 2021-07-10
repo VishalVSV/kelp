@@ -13,16 +13,26 @@ pub enum EditDiff {
     InsertChar(X, Y, char),
     DeleteChar(X, Y, char, bool),// Backspace or delete
 
+    Compound(Vec<EditDiff>),
+
     NewLine(Y),
-    DeleteLine(Y, String),
+    DeleteLine(Y, String, LineDeleteMode),
 
     SplitLine(X, Y)
 }
 
+#[derive(PartialEq,Debug, Clone, Copy)]
+pub enum LineDeleteMode {
+    Joined,
+    WholeLine
+}
+
 impl EditDiff {
-    pub fn apply(&self, rows: &mut Vec<Row>, which: UndoRedo) -> (X, Y) {
+    pub fn apply(&self, which: UndoRedo, doc: &mut Document) -> (X, Y) {
         use EditDiff::*;
         use UndoRedo::*;
+
+        let rows = &mut doc.rows;
 
         match *self {
             InsertChar(x, y, c) => match which {
@@ -46,10 +56,39 @@ impl EditDiff {
                 }
             },
 
-            
-            DeleteLine(y, ref s) => match which {
+            Compound(ref d) => match which {
                 Undo => {
-                    if y != 0 {
+                    let mut x = 0;
+                    let mut y = 0;
+
+                    let mut diffs = d.clone();
+
+                    while diffs.len() > 0 {
+                        let diff = diffs.pop().unwrap();
+                        let a = diff.apply(Undo, doc);
+                        x = a.0;
+                        y = a.1;
+                    }
+
+                    (x,y)
+                },
+                Redo => {
+                    let mut x = 0;
+                    let mut y = 0;
+
+                    for diff in d {
+                        let a = diff.apply(Redo, doc);
+                        x = a.0;
+                        y = a.1;
+                    }
+
+                    (x,y)
+                }
+            }
+            
+            DeleteLine(y, ref s, mode) => match which {
+                Undo => {
+                    if y != 0  && mode == LineDeleteMode::Joined {
                         let l = rows[y - 1].buf.len();
                         rows[y - 1].buf.truncate(l - s.len());
                     }

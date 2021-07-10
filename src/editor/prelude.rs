@@ -172,6 +172,19 @@ impl Selection {
             end_col
         }
     }
+
+    pub fn normalize(&mut self) {
+        if self.end_row < self.start_row {
+            std::mem::swap(&mut self.end_row,&mut self.start_row);
+            std::mem::swap(&mut self.end_col,&mut self.start_col);
+        }
+        else if self.end_row == self.start_row {
+            if self.end_col < self.start_col {
+                std::mem::swap(&mut self.end_row,&mut self.start_row);
+                std::mem::swap(&mut self.end_col,&mut self.start_col);
+            }
+        }
+    }
 }
 
 impl Row {
@@ -285,7 +298,7 @@ impl Row {
     }
 
     #[inline]
-    pub fn remove_at(&mut self,idx: usize) {
+    pub fn remove_at(&mut self,idx: usize) -> char {
         let mut loc_idx = if self.indices.is_none() {
             idx
         }
@@ -295,10 +308,11 @@ impl Row {
         while !self.buf.is_char_boundary(loc_idx) {
             loc_idx -= 1;
         }
-        self.buf.remove(loc_idx);
+        let c = self.buf.remove(loc_idx);
         if self.indices.is_some() {
             self.refresh_cache();
         }
+        c
     }
 
     #[inline]

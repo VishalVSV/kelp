@@ -194,13 +194,13 @@ impl Token {
                 if row_index >= selection.start_row && row_index <= selection.end_row {
                     if selection.start_row != selection.end_row {
                         if row_index == selection.start_row {
-                            res.push(Token::Selection(from_char!(i)..src.len()));
+                            res.push(Token::Selection(from_char!(selection.start_col)..src.len()));
                         }
                         else if row_index == selection.end_row {
                             res.push(Token::Selection(0..from_char!(selection.end_col)));
                         }
                         else {
-                            res.push(Token::Selection(from_char!(i)..src.len()));
+                            res.push(Token::Selection(0..src.len()));
                         }
                     }
                     else {

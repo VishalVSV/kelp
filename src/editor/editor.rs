@@ -15,6 +15,7 @@ use crossterm::event::{Event::{Key,Mouse},KeyModifiers,KeyCode};
 use crossterm::event::read;
 use std::error::Error;
 use crate::editor::utils::pad_center;
+use crate::editor::history::LineDeleteMode;
 
 use crossterm::ExecutableCommand;
 
@@ -395,7 +396,7 @@ impl Editor {
                         if let Some(history_index) = self.docs[doc_index].history_index {
                             if history_index < self.docs[doc_index].history.len() {
                                 let action = self.docs[doc_index].history[history_index].clone();
-                                let (x,y) = action.apply(&mut self.docs[doc_index].rows, UndoRedo::Undo);
+                                let (x,y) = action.apply(UndoRedo::Undo, &mut self.docs[doc_index]);
 
                                 if history_index == 0 {
                                     self.docs[doc_index].history_index = None;
@@ -415,7 +416,7 @@ impl Editor {
                         if let Some(history_index) = self.docs[doc_index].history_index {
                             if history_index + 1 < self.docs[doc_index].history.len() {
                                 let action = self.docs[doc_index].history[history_index + 1].clone();
-                                let (x,y) = action.apply(&mut self.docs[doc_index].rows, UndoRedo::Redo);
+                                let (x,y) = action.apply(UndoRedo::Redo, &mut self.docs[doc_index]);
                                 *self.docs[doc_index].history_index.as_mut().unwrap() += 1;
                                 self.docs[doc_index].cursor_col = x;
                                 self.docs[doc_index].cursor_row = y;
@@ -425,7 +426,7 @@ impl Editor {
                             status_msg = format!("{:?}", self.docs[doc_index].history[0]);
 
                             let action = self.docs[doc_index].history[0].clone();
-                            let (x,y) = action.apply(&mut self.docs[doc_index].rows, UndoRedo::Redo);
+                            let (x,y) = action.apply(UndoRedo::Redo, &mut self.docs[doc_index]);
                             self.docs[doc_index].history_index = Some(0);
                             self.docs[doc_index].cursor_col = x;
                             self.docs[doc_index].cursor_row = y;
@@ -478,6 +479,9 @@ impl Editor {
                             if let Ok(clipboard_contents) = ctx.get_contents() {
                                 let mut i = 0;
                                 let line_count = clipboard_contents.lines().count();
+
+                                let mut paste_diff = Vec::new();
+
                                 for line in clipboard_contents.lines() {
                                     let row = self.docs[doc_index].cursor_row;
                                     for c in line.chars() {
@@ -485,19 +489,22 @@ impl Editor {
 
                                         self.docs[doc_index].dirty += 1;
                                         self.docs[doc_index].rows[row].insert_char(col, c);
-                                        self.docs[doc_index].add_diff(EditDiff::InsertChar(col, row, c));
+                                        paste_diff.push(EditDiff::InsertChar(col, row, c));
 
                                         self.docs[doc_index].cursor_col += 1;
                                     }
 
                                     if i + 1 < line_count {
                                         self.docs[doc_index].rows.insert(row + 1, Row::empty());
+                                        paste_diff.push(EditDiff::NewLine(row + 1));
                                         self.docs[doc_index].cursor_row += 1;
                                         self.docs[doc_index].cursor_col = 0;
                                     }
 
                                     i += 1;
                                 }
+
+                                self.docs[doc_index].add_diff(EditDiff::Compound(paste_diff));
                             }
                         }
                     };
@@ -542,6 +549,73 @@ impl Editor {
 
                             match k.code {
                                 KeyCode::Char(c) => {
+
+                                    if doc.selection.is_some() {
+                                        doc.selection.as_mut().unwrap().normalize();
+
+                                        if let Some(selection) = doc.selection {
+                                            doc.cursor_col = selection.start_col;
+                                            doc.cursor_row = selection.start_row;
+
+                                            if selection.start_row == selection.end_row {
+                                                let mut diffs = Vec::new();
+
+                                                for _ in selection.start_col..selection.end_col {
+                                                    let c = doc.rows[selection.start_row].remove_at(selection.start_col);
+                                                    diffs.push(EditDiff::DeleteChar(selection.start_col + 1, selection.start_row, c, false));
+                                                }
+
+                                                doc.add_diff(EditDiff::Compound(diffs));
+                                            }
+                                            else {
+                                                let mut ly = selection.start_row;
+                                                let mut line_index = selection.start_row;
+
+                                                let mut diffs = Vec::new();
+
+                                                while ly <= selection.end_row {
+                                                    if ly == selection.start_row {
+                                                        if selection.start_col == 0 {
+                                                            let line = doc.rows.remove(line_index);
+                                                            diffs.push(EditDiff::DeleteLine(line_index, line.buf, LineDeleteMode::WholeLine));
+                                                        }
+                                                        else {
+                                                            let len = doc.rows[line_index].len();
+                                                            for _ in selection.start_col..len {
+                                                                let c = doc.rows[line_index].remove_at(selection.start_col);
+                                                                diffs.push(EditDiff::DeleteChar(selection.start_col + 1, selection.start_row, c, false));
+                                                            }
+
+                                                            line_index += 1;
+                                                        }
+                                                    }
+                                                    else if ly == selection.end_row {
+                                                        let len = doc.rows[line_index].len();
+                                                        if selection.end_col == len {
+                                                            let line = doc.rows.remove(line_index);
+                                                            diffs.push(EditDiff::DeleteLine(line_index, line.buf, LineDeleteMode::WholeLine));
+                                                        }
+                                                        else {
+                                                            for _ in 0..selection.end_col {
+                                                                let c = doc.rows[line_index].remove_at(0);
+                                                                diffs.push(EditDiff::DeleteChar(1, selection.end_row, c, false));
+                                                            }
+
+                                                            line_index += 1;
+                                                        }
+                                                    }
+                                                    else {
+                                                        let line = doc.rows.remove(line_index);
+                                                        diffs.push(EditDiff::DeleteLine(line_index, line.buf, LineDeleteMode::WholeLine));
+                                                    }
+
+                                                    ly += 1;
+                                                }
+                                                doc.add_diff(EditDiff::Compound(diffs));
+                                            }
+                                        }
+                                    }
+
                                     if doc.cursor_col != 0 {
                                         let last_chr = doc.rows[doc.cursor_row].char_at(doc.cursor_col - 1);
                                         if config.auto_close.contains_key(&last_chr) {
@@ -570,6 +644,74 @@ impl Editor {
                                 },
                                 KeyCode::Esc => break,
                                 KeyCode::Backspace => {
+                                    if doc.selection.is_some() {
+                                        doc.selection.as_mut().unwrap().normalize();
+
+                                        if let Some(selection) = doc.selection {
+                                            doc.cursor_col = selection.start_col;
+                                            doc.cursor_row = selection.start_row;
+
+                                            if selection.start_row == selection.end_row {
+                                                let mut diffs = Vec::new();
+
+                                                for _ in selection.start_col..selection.end_col {
+                                                    let c = doc.rows[selection.start_row].remove_at(selection.start_col);
+                                                    diffs.push(EditDiff::DeleteChar(selection.start_col + 1, selection.start_row, c, false));
+                                                }
+
+                                                doc.add_diff(EditDiff::Compound(diffs));
+                                            }
+                                            else {
+                                                let mut ly = selection.start_row;
+                                                let mut line_index = selection.start_row;
+
+                                                let mut diffs = Vec::new();
+
+                                                while ly <= selection.end_row {
+                                                    if ly == selection.start_row {
+                                                        if selection.start_col == 0 {
+                                                            let line = doc.rows.remove(line_index);
+                                                            diffs.push(EditDiff::DeleteLine(line_index, line.buf, LineDeleteMode::WholeLine));
+                                                        }
+                                                        else {
+                                                            let len = doc.rows[line_index].len();
+                                                            for _ in selection.start_col..len {
+                                                                let c = doc.rows[line_index].remove_at(selection.start_col);
+                                                                diffs.push(EditDiff::DeleteChar(selection.start_col + 1, selection.start_row, c, false));
+                                                            }
+
+                                                            line_index += 1;
+                                                        }
+                                                    }
+                                                    else if ly == selection.end_row {
+                                                        let len = doc.rows[line_index].len();
+                                                        if selection.end_col == len {
+                                                            let line = doc.rows.remove(line_index);
+                                                            diffs.push(EditDiff::DeleteLine(line_index, line.buf, LineDeleteMode::WholeLine));
+                                                        }
+                                                        else {
+                                                            for _ in 0..selection.end_col {
+                                                                let c = doc.rows[line_index].remove_at(0);
+                                                                diffs.push(EditDiff::DeleteChar(1, selection.end_row, c, false));
+                                                            }
+
+                                                            line_index += 1;
+                                                        }
+                                                    }
+                                                    else {
+                                                        let line = doc.rows.remove(line_index);
+                                                        diffs.push(EditDiff::DeleteLine(line_index, line.buf, LineDeleteMode::WholeLine));
+                                                    }
+
+                                                    ly += 1;
+                                                }
+                                                doc.add_diff(EditDiff::Compound(diffs));
+                                            }
+                                        }
+
+                                        continue;
+                                    }
+
                                     doc.dirty += 1;
                                     if doc.rows[doc.cursor_row].len() != 0 {
                                         if doc.cursor_col == doc.rows[doc.cursor_row].len() {
@@ -587,12 +729,12 @@ impl Editor {
                                                     if doc.cursor_col == 0 {
                                                         doc.rows.remove(doc.cursor_row);
 
-                                                        doc.add_diff(EditDiff::DeleteLine(doc.cursor_row, String::new()));
+                                                        doc.add_diff(EditDiff::DeleteLine(doc.cursor_row, String::new(), LineDeleteMode::WholeLine));
                                                     }
                                                     else {
                                                         let line = doc.rows[doc.cursor_row + 1].buf.clone();
                                                         doc.rows.remove(doc.cursor_row + 1);
-                                                        doc.add_diff(EditDiff::DeleteLine(doc.cursor_row + 1, line.clone()));
+                                                        doc.add_diff(EditDiff::DeleteLine(doc.cursor_row + 1, line.clone(), LineDeleteMode::Joined));
                                                         doc.rows[doc.cursor_row].buf.push_str(&line);
                                                     }
                                                 }
@@ -608,7 +750,7 @@ impl Editor {
                                     }
                                     else {
                                         if doc.cursor_row != 0 {
-                                            doc.add_diff(EditDiff::DeleteLine(doc.cursor_row, String::new()));
+                                            doc.add_diff(EditDiff::DeleteLine(doc.cursor_row, String::new(), LineDeleteMode::WholeLine));
 
                                             doc.rows.remove(doc.cursor_row);
                                             doc.cursor_row -= 1;
@@ -619,6 +761,74 @@ impl Editor {
                                     
                                 },
                                 KeyCode::Delete => {
+                                    if doc.selection.is_some() {
+                                        doc.selection.as_mut().unwrap().normalize();
+
+                                        if let Some(selection) = doc.selection {
+                                            doc.cursor_col = selection.start_col;
+                                            doc.cursor_row = selection.start_row;
+
+                                            if selection.start_row == selection.end_row {
+                                                let mut diffs = Vec::new();
+
+                                                for _ in selection.start_col..selection.end_col {
+                                                    let c = doc.rows[selection.start_row].remove_at(selection.start_col);
+                                                    diffs.push(EditDiff::DeleteChar(selection.start_col + 1, selection.start_row, c, false));
+                                                }
+
+                                                doc.add_diff(EditDiff::Compound(diffs));
+                                            }
+                                            else {
+                                                let mut ly = selection.start_row;
+                                                let mut line_index = selection.start_row;
+
+                                                let mut diffs = Vec::new();
+
+                                                while ly <= selection.end_row {
+                                                    if ly == selection.start_row {
+                                                        if selection.start_col == 0 {
+                                                            let line = doc.rows.remove(line_index);
+                                                            diffs.push(EditDiff::DeleteLine(line_index, line.buf, LineDeleteMode::WholeLine));
+                                                        }
+                                                        else {
+                                                            let len = doc.rows[line_index].len();
+                                                            for _ in selection.start_col..len {
+                                                                let c = doc.rows[line_index].remove_at(selection.start_col);
+                                                                diffs.push(EditDiff::DeleteChar(selection.start_col + 1, selection.start_row, c, false));
+                                                            }
+
+                                                            line_index += 1;
+                                                        }
+                                                    }
+                                                    else if ly == selection.end_row {
+                                                        let len = doc.rows[line_index].len();
+                                                        if selection.end_col == len {
+                                                            let line = doc.rows.remove(line_index);
+                                                            diffs.push(EditDiff::DeleteLine(line_index, line.buf, LineDeleteMode::WholeLine));
+                                                        }
+                                                        else {
+                                                            for _ in 0..selection.end_col {
+                                                                let c = doc.rows[line_index].remove_at(0);
+                                                                diffs.push(EditDiff::DeleteChar(1, selection.end_row, c, false));
+                                                            }
+
+                                                            line_index += 1;
+                                                        }
+                                                    }
+                                                    else {
+                                                        let line = doc.rows.remove(line_index);
+                                                        diffs.push(EditDiff::DeleteLine(line_index, line.buf, LineDeleteMode::WholeLine));
+                                                    }
+
+                                                    ly += 1;
+                                                }
+                                                doc.add_diff(EditDiff::Compound(diffs));
+                                            }
+                                        }
+
+                                        continue;
+                                    }
+
                                     doc.dirty += 1;
                                     if doc.rows[doc.cursor_row].len() != 0 {
                                         if doc.cursor_col == doc.rows[doc.cursor_row].len() {
@@ -639,7 +849,7 @@ impl Editor {
                                     else {
                                         if doc.cursor_row + 1 != doc.rows.len() {
                                             doc.rows.remove(doc.cursor_row);
-                                            doc.add_diff(EditDiff::DeleteLine(doc.cursor_row, String::new()));
+                                            doc.add_diff(EditDiff::DeleteLine(doc.cursor_row, String::new(), LineDeleteMode::WholeLine));
                                         }
                                     }
                                 },
@@ -939,7 +1149,10 @@ impl Editor {
                                                 }
                                             }
                                             else {
-                                                                                                
+                                                self.open_doc = Some(i);
+                                                redraw = true;
+                                                mouse_event = false;
+                                                continue 'editor;
                                             }
                                         }
                                     }
