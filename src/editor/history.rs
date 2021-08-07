@@ -2,7 +2,7 @@ use crate::editor::prelude::*;
 
 pub enum UndoRedo {
     Undo,
-    Redo
+    Redo,
 }
 
 type X = usize;
@@ -11,24 +11,24 @@ type Y = usize;
 #[derive(Debug, Clone)]
 pub enum EditDiff {
     InsertChar(X, Y, char),
-    DeleteChar(X, Y, char, bool),// Backspace or delete
+    DeleteChar(X, Y, char, bool), // Backspace or delete
 
     Compound(Vec<EditDiff>),
 
     NewLine(Y),
     DeleteLine(Y, String, LineDeleteMode),
 
-    SplitLine(X, Y)
+    SplitLine(X, Y),
 }
 
-#[derive(PartialEq,Debug, Clone, Copy)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub enum LineDeleteMode {
     Joined,
-    WholeLine
+    WholeLine,
 }
 
 impl EditDiff {
-    pub fn apply(&self, which: UndoRedo, doc: &mut Document) -> (X, Y) {
+    pub fn apply(&self, which: UndoRedo, doc: &mut TextDocument) -> (X, Y) {
         use EditDiff::*;
         use UndoRedo::*;
 
@@ -38,8 +38,8 @@ impl EditDiff {
             InsertChar(x, y, c) => match which {
                 Undo => {
                     rows[y].remove_at(x);
-                    (x,y)
-                },
+                    (x, y)
+                }
                 Redo => {
                     rows[y].insert_char(x, c);
                     (x + 1, y)
@@ -49,7 +49,7 @@ impl EditDiff {
                 Undo => {
                     rows[y].insert_char(x - 1, c);
                     (x - if is_backspace { 0 } else { 1 }, y)
-                },
+                }
                 Redo => {
                     rows[y].remove_at(x - 1);
                     (x - 1, y)
@@ -70,8 +70,8 @@ impl EditDiff {
                         y = a.1;
                     }
 
-                    (x,y)
-                },
+                    (x, y)
+                }
                 Redo => {
                     let mut x = 0;
                     let mut y = 0;
@@ -82,20 +82,20 @@ impl EditDiff {
                         y = a.1;
                     }
 
-                    (x,y)
+                    (x, y)
                 }
-            }
-            
+            },
+
             DeleteLine(y, ref s, mode) => match which {
                 Undo => {
-                    if y != 0  && mode == LineDeleteMode::Joined {
+                    if y != 0 && mode == LineDeleteMode::Joined {
                         let l = rows[y - 1].buf.len();
                         rows[y - 1].buf.truncate(l - s.len());
                     }
-                    
+
                     rows.insert(y, Row::from_string(s.clone()));
-                    (0,y)
-                },
+                    (0, y)
+                }
                 Redo => {
                     rows.remove(y);
                     (rows[y - 1].len(), y - 1)
@@ -112,7 +112,7 @@ impl EditDiff {
 
                     rows.remove(y);
                     (cx, cy)
-                },
+                }
                 Redo => {
                     rows.insert(y, Row::empty());
                     (0, y)
@@ -122,11 +122,11 @@ impl EditDiff {
             SplitLine(x, y) => match which {
                 Undo => {
                     let col = rows[y].len();
-                    rows[y] = Row::from_string(format!("{}{}",rows[y].buf,rows[y + 1].buf));
+                    rows[y] = Row::from_string(format!("{}{}", rows[y].buf, rows[y + 1].buf));
                     rows.remove(y + 1);
 
                     (col, y)
-                },
+                }
                 Redo => {
                     let (left, right) = rows[y].split_at(x);
                     rows[y] = Row::from_string(left);
@@ -134,7 +134,7 @@ impl EditDiff {
 
                     (0, y + 1)
                 }
-            }
+            },
         }
     }
 }

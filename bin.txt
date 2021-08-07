@@ -1,0 +1,3 @@
+Sample binary text
+
+Side preview for ascii text

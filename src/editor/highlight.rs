@@ -1,8 +1,8 @@
 use crate::editor::editor::debug_file;
 use crate::editor::editor::is_debug;
-use crossterm::style::Color;
 use crate::editor::prelude::*;
 use core::ops::Range;
+use crossterm::style::Color;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -17,33 +17,36 @@ pub enum Token {
     Number(Range<usize>),
     Selection(Range<usize>),
 
-    CustomStyle(Range<usize>, String)
+    CustomStyle(Range<usize>, String),
 }
 
 enum TokenizerAction {
     ParseString(char),
-    ParseComment
+    ParseComment,
 }
 
 impl Token {
-    pub fn tokenize(rows: &mut Vec<Row>,mut info: HighlightingInfo,from: usize,num_lines: usize, config: &FileConfig) {
-        let selection = 
-            if info.selection.is_none() {
-                None
-            }
-            else {
-                let s = info.selection.as_mut().unwrap();
-                if s.start_row > s.end_row {
-                    std::mem::swap(&mut s.start_row, &mut s.end_row);
+    pub fn tokenize(
+        rows: &mut Vec<Row>,
+        mut info: HighlightingInfo,
+        from: usize,
+        num_lines: usize,
+        config: &FileConfig,
+    ) {
+        let selection = if info.selection.is_none() {
+            None
+        } else {
+            let s = info.selection.as_mut().unwrap();
+            if s.start_row > s.end_row {
+                std::mem::swap(&mut s.start_row, &mut s.end_row);
+                std::mem::swap(&mut s.start_col, &mut s.end_col);
+            } else if s.start_row == s.end_row {
+                if s.start_col > s.end_col {
                     std::mem::swap(&mut s.start_col, &mut s.end_col);
                 }
-                else if s.start_row == s.end_row {
-                    if s.start_col > s.end_col {
-                        std::mem::swap(&mut s.start_col, &mut s.end_col);
-                    }
-                }
-                Some(s)
-            };
+            }
+            Some(s)
+        };
 
         let mut parser = None;
 
@@ -52,97 +55,99 @@ impl Token {
 
             let src = &row.buf;
 
-            let char_indices: Vec<(usize,char)> = src.char_indices().collect();
+            let char_indices: Vec<(usize, char)> = src.char_indices().collect();
 
             let mut odd_token = String::new();
-    
+
             let mut i = 0;
             macro_rules! parse_string {
                 ($c: expr) => {
                     if !odd_token.is_empty() {
                         if odd_token.ends_with(&config.line_comment_start) {
                             if odd_token.len() > config.line_comment_start.len() {
-                                res.push(Token::Plain(from_char!(i) - odd_token.len()..from_char!(i) - config.line_comment_start.len()));
+                                res.push(Token::Plain(
+                                    from_char!(i) - odd_token.len()
+                                        ..from_char!(i) - config.line_comment_start.len(),
+                                ));
                             }
-                            res.push(Token::Comment(from_char!(i) - config.line_comment_start.len()..src.len()));
+                            res.push(Token::Comment(
+                                from_char!(i) - config.line_comment_start.len()..src.len(),
+                            ));
                             odd_token.clear();
                             break;
-                        }
-                        else {
+                        } else {
                             res.push(Token::Plain(from_char!(i) - odd_token.len()..from_char!(i)));
                         }
-    
+
                         odd_token.clear();
                     }
-    
+
                     let mut len = 1;
                     let mut is_escaped = false;
                     i += 1;
                     while i < char_indices.len() && (char_indices[i].1 != $c || is_escaped) {
                         if i < char_indices.len() && char_indices[i].1 == '\\' {
                             if i + 2 <= char_indices.len() {
-                                res.push(Token::CustomStyle(from_char!(i)..from_char!(i + 2), format!("{}{}",Token::String(0..0).get_style(config),crossterm::style::Attribute::Dim)));
+                                res.push(Token::CustomStyle(
+                                    from_char!(i)..from_char!(i + 2),
+                                    format!(
+                                        "{}{}",
+                                        Token::String(0..0).get_style(config),
+                                        crossterm::style::Attribute::Dim
+                                    ),
+                                ));
                             }
                             is_escaped = true;
-                        }
-                        else {
+                        } else {
                             is_escaped = false;
                         }
 
                         len += 1;
                         i += 1;
-
                     }
-    
+
                     if i < char_indices.len() {
                         len += 1;
                         i += 1;
-                    }
-                    else {
+                    } else {
                         parser = Some(TokenizerAction::ParseString($c));
                     }
-    
+
                     res.push(Token::String(from_char!(i - len)..from_char!(i)));
-                    
+
                     i -= 1;
-                            
                 };
             }
 
             macro_rules! string_match {
-                ($str: expr) => {
-                    {
-                        let mut offset = 0;
-                        let mut res = true;
-                        for c in $str.chars() {
-                            if i + offset < char_indices.len() {
-                                if c != char_indices[i + offset].1 {
-                                    res = false;
-                                    break;
-                                }
-                            }
-                            else {
+                ($str: expr) => {{
+                    let mut offset = 0;
+                    let mut res = true;
+                    for c in $str.chars() {
+                        if i + offset < char_indices.len() {
+                            if c != char_indices[i + offset].1 {
                                 res = false;
                                 break;
                             }
-                            offset += 1;
+                        } else {
+                            res = false;
+                            break;
                         }
-                        res
+                        offset += 1;
                     }
-                };
+                    res
+                }};
             }
 
             macro_rules! handle_odd_token {
                 () => {
                     if !odd_token.is_empty() {
-                    
                         let li = if i >= char_indices.len() {
                             src.len()
-                        }
-                        else {
+                        } else {
                             char_indices[i].0
                         };
-                    
+
                         res.push(Token::Plain(li - odd_token.len()..li));
                         odd_token.clear();
                     }
@@ -150,61 +155,53 @@ impl Token {
             }
 
             macro_rules! is_inside_sel {
-                () => {
-                    {
-                        if let Some(selection) = &selection {
-                            row_index >= selection.start_row && row_index <= selection.end_row && 
-                                if selection.start_row != selection.end_row {
-                                    if row_index == selection.start_row {
-                                        i >= selection.start_col
-                                    }
-                                    else if row_index == selection.end_row {
-                                        i < selection.end_col
-                                    }
-                                    else {
-                                        true
-                                    }
+                () => {{
+                    if let Some(selection) = &selection {
+                        row_index >= selection.start_row
+                            && row_index <= selection.end_row
+                            && if selection.start_row != selection.end_row {
+                                if row_index == selection.start_row {
+                                    i >= selection.start_col
+                                } else if row_index == selection.end_row {
+                                    i < selection.end_col
+                                } else {
+                                    true
                                 }
-                                else {
-                                    i >= selection.start_col && i < selection.end_col
-                                }
-                        }
-                        else {
-                            false
-                        }
+                            } else {
+                                i >= selection.start_col && i < selection.end_col
+                            }
+                    } else {
+                        false
                     }
-                };
+                }};
             }
-            
+
             macro_rules! from_char {
                 ($i: expr) => {
                     if $i < char_indices.len() {
                         char_indices[$i].0
-                    }
-                    else if $i == char_indices.len() {
+                    } else if $i == char_indices.len() {
                         src.len()
-                    }
-                    else {
+                    } else {
                         panic!("{} out of bounds...", $i)
                     }
                 };
             }
-            
+
             if let Some(selection) = &selection {
                 if row_index >= selection.start_row && row_index <= selection.end_row {
                     if selection.start_row != selection.end_row {
                         if row_index == selection.start_row {
                             res.push(Token::Selection(from_char!(selection.start_col)..src.len()));
-                        }
-                        else if row_index == selection.end_row {
+                        } else if row_index == selection.end_row {
                             res.push(Token::Selection(0..from_char!(selection.end_col)));
-                        }
-                        else {
+                        } else {
                             res.push(Token::Selection(0..src.len()));
                         }
-                    }
-                    else {
-                        res.push(Token::Selection(from_char!(selection.start_col)..from_char!(selection.end_col)));
+                    } else {
+                        res.push(Token::Selection(
+                            from_char!(selection.start_col)..from_char!(selection.end_col),
+                        ));
                     }
                 }
             }
@@ -224,11 +221,17 @@ impl Token {
                         while i < char_indices.len() && (char_indices[i].1 != *c || is_escaped) {
                             if i < char_indices.len() && char_indices[i].1 == '\\' {
                                 if i + 2 <= char_indices.len() {
-                                    res.push(Token::CustomStyle(from_char!(i)..from_char!(i + 2), format!("{}{}",Token::String(0..0).get_style(config),crossterm::style::Attribute::Dim)));
+                                    res.push(Token::CustomStyle(
+                                        from_char!(i)..from_char!(i + 2),
+                                        format!(
+                                            "{}{}",
+                                            Token::String(0..0).get_style(config),
+                                            crossterm::style::Attribute::Dim
+                                        ),
+                                    ));
                                 }
                                 is_escaped = true;
-                            }
-                            else {
+                            } else {
                                 is_escaped = false;
                             }
 
@@ -240,14 +243,14 @@ impl Token {
                             i += 1;
                             res.push(Token::String(from_char!(i - len)..from_char!(i)));
                             parser = None;
-                        }
-                        else {
+                        } else {
                             res.push(Token::String(0..src.len()));
                         }
-                    },
+                    }
                     TokenizerAction::ParseComment => {
                         let mut len = 0;
-                        while i < char_indices.len() && !string_match!(config.multi_line_comment.1) {
+                        while i < char_indices.len() && !string_match!(config.multi_line_comment.1)
+                        {
                             i += 1;
                             len += 1;
                         }
@@ -257,8 +260,7 @@ impl Token {
 
                             res.push(Token::Comment(from_char!(i - len)..from_char!(i)));
                             parser = None;
-                        }
-                        else {
+                        } else {
                             res.push(Token::Comment(0..src.len()));
                         }
                     }
@@ -270,26 +272,27 @@ impl Token {
                     handle_odd_token!();
 
                     let mut len = 0;
-                    while i < char_indices.len() && (char_indices[i].1.is_alphanumeric() || char_indices[i].1 == '_') {
+                    while i < char_indices.len()
+                        && (char_indices[i].1.is_alphanumeric() || char_indices[i].1 == '_')
+                    {
                         len += 1;
                         i += 1;
                     }
-    
+
                     if len != 0 {
                         if i < char_indices.len() && char_indices[i].1 == '(' {
                             res.push(Token::FnCall(from_char!(i - len)..from_char!(i)));
-                        }
-                        else if i < char_indices.len() && char_indices[i].1 == '!' {
+                        } else if i < char_indices.len() && char_indices[i].1 == '!' {
                             res.push(Token::Macro(from_char!(i - len)..from_char!(i)));
-                        }
-                        else if config.keywords.contains(&src[from_char!(i - len)..from_char!(i)].to_owned()) {
+                        } else if config
+                            .keywords
+                            .contains(&src[from_char!(i - len)..from_char!(i)].to_owned())
+                        {
                             res.push(Token::Keyword(from_char!(i - len)..from_char!(i)));
-                        }
-                        else {
+                        } else {
                             res.push(Token::Identifier(from_char!(i - len)..from_char!(i)));
                         }
-        
-                        
+
                         if i != char_indices.len() && !is_inside_sel!() {
                             i -= 1;
                         }
@@ -298,8 +301,7 @@ impl Token {
                     // else if i != 0 {
                     //     panic!("{} at {} {:?} {}",char_indices[i].1, i, res, status);
                     // }
-                }
-                else if char_indices[i].1.is_numeric() {
+                } else if char_indices[i].1.is_numeric() {
                     handle_odd_token!();
 
                     let mut len = 0;
@@ -307,20 +309,18 @@ impl Token {
                         len += 1;
                         i += 1;
                     }
-    
+
                     res.push(Token::Number(from_char!(i - len)..from_char!(i)));
-                    
+
                     if i != char_indices.len() {
                         i -= 1;
                     }
-                }
-                else if string_match!(config.line_comment_start) {
+                } else if string_match!(config.line_comment_start) {
                     handle_odd_token!();
-                    
+
                     res.push(Token::Comment(from_char!(i)..src.len()));
                     i = src.len();
-                }
-                else if string_match!(config.multi_line_comment.0) {
+                } else if string_match!(config.multi_line_comment.0) {
                     handle_odd_token!();
                     let mut len = config.multi_line_comment.0.len();
                     i += config.multi_line_comment.0.len();
@@ -339,42 +339,36 @@ impl Token {
                         if i < char_indices.len() {
                             i -= 1;
                         }
-                    }
-                    else {
+                    } else {
                         res.push(Token::Comment(from_char!(i - len)..from_char!(i)));
                         parser = Some(TokenizerAction::ParseComment);
                     }
-                }
-                else if char_indices[i].1 == '"' {
+                } else if char_indices[i].1 == '"' {
                     handle_odd_token!();
-                    
+
                     parse_string!('"');
-                }
-                else if char_indices[i].1 == '\'' {
+                } else if char_indices[i].1 == '\'' {
                     handle_odd_token!();
-                    
+
                     parse_string!('\'');
-                }
-                else if char_indices[i].1 == '`' {    
+                } else if char_indices[i].1 == '`' {
                     handle_odd_token!();
-                                    
+
                     parse_string!('`');
-                }
-                else {
+                } else {
                     odd_token.push(char_indices[i].1);
                 }
 
                 i += 1;
             }
             handle_odd_token!();
-            
+
             Token::normalize(&mut res, src.len(), config, src.to_string());
             row.tokens = res;
         }
     }
 
     pub fn normalize(tokens: &mut Vec<Token>, len: usize, _config: &FileConfig, src: String) {
-
         if tokens.len() == 0 || len == 0 {
             return;
         }
@@ -388,8 +382,7 @@ impl Token {
                         if tokens[normalizing_line[i] as usize].priority() < token.priority() {
                             normalizing_line[i] = token_id as i32;
                         }
-                    }
-                    else {
+                    } else {
                         normalizing_line[i] = token_id as i32;
                     }
                 }
@@ -410,8 +403,7 @@ impl Token {
             if current_token == -1 {
                 current_token = *token_id;
                 start = i;
-            }
-            else {
+            } else {
                 if *token_id != current_token {
                     res.push(tokens[current_token as usize].clone());
                     let l = res.len();
@@ -428,8 +420,7 @@ impl Token {
             res.push(tokens[token_id_outer as usize].clone());
             let l = res.len();
             *res[l - 1].get_range_mut() = start..i_outer + 1;
-        }
-        else {
+        } else {
             panic!("{:?} {:?} {:?}", tokens, res, normalizing_line);
         }
 
@@ -437,10 +428,17 @@ impl Token {
             let mut d = String::new();
 
             for t in &res {
-                d.push_str(&format!("{}|", &src[t.get_range().start..t.get_range().end]));
+                d.push_str(&format!(
+                    "{}|",
+                    &src[t.get_range().start..t.get_range().end]
+                ));
             }
 
-            std::fs::write(debug_file(), format!("{}\n{:?}\n{:?}",d, res, tokens).as_bytes()).unwrap();
+            std::fs::write(
+                debug_file(),
+                format!("{}\n{:?}\n{:?}", d, res, tokens).as_bytes(),
+            )
+            .unwrap();
         }
 
         *tokens = res;
@@ -457,7 +455,7 @@ impl Token {
             Token::Macro(_) => 3,
             Token::Number(_) => 1,
             Token::Selection(_) => 10,
-            Token::CustomStyle(_,_) => 10,
+            Token::CustomStyle(_, _) => 10,
         }
     }
 
@@ -472,7 +470,7 @@ impl Token {
             Token::Macro(r) => r.start,
             Token::Number(r) => r.start,
             Token::Selection(r) => r.start,
-            Token::CustomStyle(r,_) => r.start,
+            Token::CustomStyle(r, _) => r.start,
         }
     }
 
@@ -487,7 +485,7 @@ impl Token {
             Token::Macro(r) => r.end,
             Token::Number(r) => r.end,
             Token::Selection(r) => r.end,
-            Token::CustomStyle(r,_) => r.end,
+            Token::CustomStyle(r, _) => r.end,
         }
     }
 
@@ -502,51 +500,96 @@ impl Token {
             Token::Macro(r) => r,
             Token::Number(r) => r,
             Token::Selection(r) => r,
-            Token::CustomStyle(r,_) => r,
+            Token::CustomStyle(r, _) => r,
         }
     }
 
     pub fn get_style(&self, config: &FileConfig) -> String {
-        let ident = config.syntax_colors.get(&"identifier".to_owned()).unwrap_or(&(255,255,255));
-        let keyword = config.syntax_colors.get(&"keyword".to_owned()).unwrap_or(&(255,255,255));
-        let string = config.syntax_colors.get(&"string".to_owned()).unwrap_or(&(255,255,255));
-        let comment = config.syntax_colors.get(&"comment".to_owned()).unwrap_or(&(255,255,255));
-        let fncall = config.syntax_colors.get(&"fncall".to_owned()).unwrap_or(&(255,255,255));
-        let macro_ = config.syntax_colors.get(&"macro".to_owned()).unwrap_or(&(255,255,255));
-        let number = config.syntax_colors.get(&"number".to_owned()).unwrap_or(&(255,255,255));
-        let selection = config.syntax_colors.get(&"selection".to_owned()).unwrap_or(&(0,0,255));
+        let ident = config
+            .syntax_colors
+            .get(&"identifier".to_owned())
+            .unwrap_or(&(255, 255, 255));
+        let keyword = config
+            .syntax_colors
+            .get(&"keyword".to_owned())
+            .unwrap_or(&(255, 255, 255));
+        let string = config
+            .syntax_colors
+            .get(&"string".to_owned())
+            .unwrap_or(&(255, 255, 255));
+        let comment = config
+            .syntax_colors
+            .get(&"comment".to_owned())
+            .unwrap_or(&(255, 255, 255));
+        let fncall = config
+            .syntax_colors
+            .get(&"fncall".to_owned())
+            .unwrap_or(&(255, 255, 255));
+        let macro_ = config
+            .syntax_colors
+            .get(&"macro".to_owned())
+            .unwrap_or(&(255, 255, 255));
+        let number = config
+            .syntax_colors
+            .get(&"number".to_owned())
+            .unwrap_or(&(255, 255, 255));
+        let selection = config
+            .syntax_colors
+            .get(&"selection".to_owned())
+            .unwrap_or(&(0, 0, 255));
 
         match self {
             Token::Identifier(_) => {
-                format!("{}",crossterm::style::SetForegroundColor(Color::from(*ident)))
-            },
-            Token::Keyword(_) => {
-                format!("{}",crossterm::style::SetForegroundColor(Color::from(*keyword)))
-            },
-            Token::String(_) => {
-                format!("{}",crossterm::style::SetForegroundColor(Color::from(*string)))
-            },
-            Token::Plain(_) => {
-                String::new()
-            },
-            Token::Comment(_) => {
-                format!("{}{}", crossterm::style::Attribute::Italic, crossterm::style::SetForegroundColor(Color::from(*comment)))
-            },
-            Token::FnCall(_) => {
-                format!("{}",crossterm::style::SetForegroundColor(Color::from(*fncall)))
-            },
-            Token::Macro(_) => {
-                format!("{}",crossterm::style::SetForegroundColor(Color::from(*macro_)))
-            },
-            Token::Number(_) => {
-                format!("{}",crossterm::style::SetForegroundColor(Color::from(*number)))
-            },
-            Token::Selection(_) => {
-                format!("{}",crossterm::style::SetBackgroundColor(Color::from(*selection)))
-            },
-            Token::CustomStyle(_, s) => {
-                s.clone()
+                format!(
+                    "{}",
+                    crossterm::style::SetForegroundColor(Color::from(*ident))
+                )
             }
+            Token::Keyword(_) => {
+                format!(
+                    "{}",
+                    crossterm::style::SetForegroundColor(Color::from(*keyword))
+                )
+            }
+            Token::String(_) => {
+                format!(
+                    "{}",
+                    crossterm::style::SetForegroundColor(Color::from(*string))
+                )
+            }
+            Token::Plain(_) => String::new(),
+            Token::Comment(_) => {
+                format!(
+                    "{}{}",
+                    crossterm::style::Attribute::Italic,
+                    crossterm::style::SetForegroundColor(Color::from(*comment))
+                )
+            }
+            Token::FnCall(_) => {
+                format!(
+                    "{}",
+                    crossterm::style::SetForegroundColor(Color::from(*fncall))
+                )
+            }
+            Token::Macro(_) => {
+                format!(
+                    "{}",
+                    crossterm::style::SetForegroundColor(Color::from(*macro_))
+                )
+            }
+            Token::Number(_) => {
+                format!(
+                    "{}",
+                    crossterm::style::SetForegroundColor(Color::from(*number))
+                )
+            }
+            Token::Selection(_) => {
+                format!(
+                    "{}",
+                    crossterm::style::SetBackgroundColor(Color::from(*selection))
+                )
+            }
+            Token::CustomStyle(_, s) => s.clone(),
         }
     }
 
@@ -561,7 +604,7 @@ impl Token {
             Token::Macro(r) => r,
             Token::Number(r) => r,
             Token::Selection(r) => r,
-            Token::CustomStyle(r,_) => r,
+            Token::CustomStyle(r, _) => r,
         }
     }
 }

@@ -1,6 +1,6 @@
-use std::any::Any;
-use crossterm::event::Event;
 use crate::Editor;
+use crossterm::event::Event;
+use std::any::Any;
 
 pub trait Plugin: Any + Send + Sync {
     fn on_load(&self, _editor: &mut Editor) {}

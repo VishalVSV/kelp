@@ -10,12 +10,12 @@ TODO:
 8. Plugins prolly lua based... cause dynamic cdylib loading very sketch
 */
 
-mod highlight;
-mod plugin;
 mod editor;
+mod highlight;
 mod history;
-mod utils;
+mod plugin;
 pub mod prelude;
+mod utils;
 
 use crate::editor::history::EditDiff;
 use unescape::unescape;
@@ -24,10 +24,13 @@ use unicode_width::UnicodeWidthStr;
 
 #[cfg(debug_assertions)]
 pub fn kelp_version() -> String {
-    format!("{} - Debug",option_env!("CARGO_PKG_VERSION").unwrap_or("Unknown"))
+    format!(
+        "{} - Debug",
+        option_env!("CARGO_PKG_VERSION").unwrap_or("Unknown")
+    )
 }
 
 #[cfg(not(debug_assertions))]
 pub fn kelp_version() -> String {
-    format!("{}",option_env!("CARGO_PKG_VERSION").unwrap_or("Unknown"))
+    format!("{}", option_env!("CARGO_PKG_VERSION").unwrap_or("Unknown"))
 }
