@@ -1873,9 +1873,10 @@ impl Editor {
             }
         }
 
-        let mut path = std::env::current_exe().unwrap_or_default();
-        path.pop();
+        let mut path = dirs::config_dir().expect("Application requires a config directory");
+        path.push("kelp");
         path.push("config.json");
+
         let mut config_file = std::fs::File::create(path)?;
 
         config_file.write_all(serde_json::to_string_pretty(&self.config)?.as_bytes())?;
@@ -2126,6 +2127,25 @@ impl Editor {
         };
         let index = self.docs.len();
 
+        let dir = std::env::current_dir().unwrap();
+        
+        let paths = std::fs::read_dir(dir).unwrap();
+
+        let mut path_list = Vec::new();
+
+        for path in paths {
+            let path = path.unwrap();
+
+            if path.file_type().unwrap().is_dir() {
+                continue;
+            }
+
+            let fname = path.file_name();
+            path_list.push(fname.to_str().unwrap().to_owned());
+        }
+
+        let mut file_index = 0;
+
         loop {
             let mut status_str = format!("[{}] - Doc {} of {}", filename, index, self.docs.len());
 
@@ -2175,11 +2195,24 @@ impl Editor {
 
             if let Ok(Key(k)) = read() {
                 if let KeyCode::Char(c) = k.code {
-                    filename.push(c);
+                    if k.modifiers.contains(KeyModifiers::CONTROL) && c == 'h' {
+                        if filename.starts_with("bin:") {
+                            filename = filename[4..].to_owned();
+                        }
+                        else {
+                            filename = format!("bin:{}", filename);
+                        }
+                    }
+                    else {
+                        filename.push(c);
+                    }
                 } else if let KeyCode::Enter = k.code {
                     break;
                 } else if k.code == KeyCode::Esc {
                     return Err("Stopped".into());
+                } else if k.code == KeyCode::Tab {
+                    filename = path_list[file_index].clone();
+                    file_index = (file_index + 1) % path_list.len();
                 } else if k.code == KeyCode::Backspace && filename.len() > 0 {
                     filename.remove(filename.len() - 1);
                 }

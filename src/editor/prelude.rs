@@ -700,8 +700,11 @@ impl Editor {
             .languages
             .insert("*".to_owned(), FileConfig::default());
 
-        let mut path = std::env::current_exe().unwrap_or_default();
-        path.pop();
+        let mut path = dirs::config_dir().expect("Application requires a config directory");
+        path.push("kelp");
+
+        std::fs::create_dir_all(path.clone()).expect("Couldn't create config directory");
+
         path.push("config.json");
         let config_file = File::open(path.clone());
 
