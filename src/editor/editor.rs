@@ -1,3 +1,13 @@
+//  _  __    _       
+// | |/ /   | |      
+// | ' / ___| |_ __  
+// |  < / _ \ | '_ \ 
+// | . \  __/ | |_) |
+// |_|\_\___|_| .__/ 
+//            | |    
+//            |_|    
+// Made by vertex
+
 use crate::editor::highlight::Token;
 use crate::editor::history::LineDeleteMode;
 use crate::editor::history::UndoRedo;
@@ -5,7 +15,7 @@ use crate::editor::prelude::*;
 use crate::editor::utils::pad_center;
 use crate::editor::utils::pad_center_str;
 use crate::editor::*;
-use crate::Editor;
+use crate::editor::prelude::Editor;
 use clipboard::ClipboardContext;
 use clipboard::ClipboardProvider;
 use crossterm::event::read;
@@ -17,6 +27,7 @@ use crossterm::event::{
 use crossterm::event::{MouseButton, MouseEventKind};
 use crossterm::style::Color;
 use std::error::Error;
+use std::io::stdout;
 use std::path::Path;
 
 use crossterm::ExecutableCommand;
@@ -137,6 +148,7 @@ impl Editor {
 
         // Editor loop
         self.redraw = true;
+        let mut _last_letter: Option<std::time::SystemTime> = None;
 
         // Diagnostic data
 
@@ -161,15 +173,15 @@ impl Editor {
                             let config = if self
                                 .config
                                 .languages
-                                .contains_key(&self.docs[doc_index].as_text_doc().extension())
+                                .contains_key(&self.docs[doc_index].as_mut_text_doc().extension())
                             {
                                 &self.config.languages
-                                    [&self.docs[doc_index].as_text_doc().extension()]
+                                    [&self.docs[doc_index].as_mut_text_doc().extension()]
                             } else {
                                 &self.config.languages[&"*".to_owned()]
                             };
-                            self.docs[doc_index].as_text_doc().save(config)?;
-                            self.docs[doc_index].as_text_doc().dirty = 0;
+                            self.docs[doc_index].as_mut_text_doc().save(config)?;
+                            self.docs[doc_index].as_mut_text_doc().dirty = 0;
                             self.status_msg =
                                 format!("Saved file as {} in ", self.docs[doc_index].filename());
                         } else if self.docs[doc_index].is_binary_doc() {
@@ -194,10 +206,10 @@ impl Editor {
                                     self.add_bin_doc(doc);
                                 } else {
                                     let config = if self.config.languages.contains_key(
-                                        &self.docs[doc_index].as_text_doc().extension(),
+                                        &self.docs[doc_index].as_mut_text_doc().extension(),
                                     ) {
                                         &self.config.languages
-                                            [&self.docs[doc_index].as_text_doc().extension()]
+                                            [&self.docs[doc_index].as_mut_text_doc().extension()]
                                     } else {
                                         &self.config.languages[&"*".to_owned()]
                                     };
@@ -260,7 +272,7 @@ impl Editor {
                 macro_rules! close_file {
                     () => {
                         if self.docs[doc_index].is_text_doc() {
-                            if self.docs[doc_index].as_text_doc().dirty == 0 {
+                            if self.docs[doc_index].as_mut_text_doc().dirty == 0 {
                                 self.docs.remove(doc_index);
 
                                 if self.docs.len() == 0 {
@@ -277,6 +289,7 @@ impl Editor {
                             } else {
                                 if self
                                     .show_prompt(
+                                        "WARNING!".to_owned(),
                                         "You haven't saved this file!".to_owned(),
                                         "Close anways".to_owned(),
                                         "Don't close".to_owned(),
@@ -316,6 +329,7 @@ impl Editor {
                             } else {
                                 if self
                                     .show_prompt(
+                                        "WARNING!".to_owned(),
                                         "You haven't saved this file!".to_owned(),
                                         "Close anways".to_owned(),
                                         "Don't close".to_owned(),
@@ -347,50 +361,50 @@ impl Editor {
                     let config = if self
                         .config
                         .languages
-                        .contains_key(&self.docs[doc_index].as_text_doc().extension())
+                        .contains_key(&self.docs[doc_index].as_mut_text_doc().extension())
                     {
-                        &self.config.languages[&self.docs[doc_index].as_text_doc().extension()]
+                        self.config.languages[&self.docs[doc_index].as_text_doc().extension()].clone()
                     } else {
-                        &self.config.languages[&"*".to_owned()]
+                        self.config.languages[&"*".to_owned()].clone()
                     };
 
-                    let lines = self.docs[doc_index].as_text_doc().rows.len();
+                    let lines = self.docs[doc_index].as_mut_text_doc().rows.len();
 
-                    if self.docs[doc_index].as_text_doc().rows.len() == 0 {
-                        self.docs[doc_index].as_text_doc().rows.push(Row::empty());
+                    if self.docs[doc_index].as_mut_text_doc().rows.len() == 0 {
+                        self.docs[doc_index].as_mut_text_doc().rows.push(Row::empty());
                     }
 
                     if !self.undergoing_selection {
-                        self.docs[doc_index].as_text_doc().selection = None;
+                        self.docs[doc_index].as_mut_text_doc().selection = None;
                     } else {
                         self.undergoing_selection = false;
                     }
 
-                    let selection = self.docs[doc_index].as_text_doc().selection.clone();
+                    let selection = self.docs[doc_index].as_mut_text_doc().selection.clone();
 
                     if self.redraw {
-                        if self.docs[doc_index].as_text_doc().selection.is_some() {
+                        if self.docs[doc_index].as_mut_text_doc().selection.is_some() {
                             let s = self.docs[doc_index]
-                                .as_text_doc()
+                                .as_mut_text_doc()
                                 .selection
                                 .as_mut()
                                 .unwrap();
 
                             if s.start_row == s.end_row && s.end_col == s.start_col {
-                                self.docs[doc_index].as_text_doc().selection = None;
+                                self.docs[doc_index].as_mut_text_doc().selection = None;
                             }
                         }
 
-                        let line_start = self.docs[doc_index].as_text_doc().line_start;
+                        let line_start = self.docs[doc_index].as_mut_text_doc().line_start;
 
                         Token::tokenize(
-                            &mut self.docs[doc_index].as_text_doc().rows,
+                            &mut self.docs[doc_index].as_mut_text_doc().rows,
                             HighlightingInfo {
                                 selection: selection,
                             },
                             line_start,
                             height - 3,
-                            config,
+                            &config,
                         );
 
                         let mut drawing_row = 0;
@@ -400,26 +414,26 @@ impl Editor {
                             if drawing_row == 0 {
                                 println!();
                             } else if processing_row + line_start - 1
-                                < self.docs[doc_index].as_text_doc().rows.len()
+                                < self.docs[doc_index].as_mut_text_doc().rows.len()
                             {
-                                if self.docs[doc_index].as_text_doc().rows
+                                if self.docs[doc_index].as_mut_text_doc().rows
                                     [processing_row - 1 + line_start]
-                                    .line_width(config)
+                                    .line_width(&config)
                                     > width
                                 {
-                                    let n = self.docs[doc_index].as_text_doc().rows
+                                    let n = self.docs[doc_index].as_mut_text_doc().rows
                                         [processing_row - 1 + line_start]
-                                        .line_width(config)
+                                        .line_width(&config)
                                         / width;
                                     let padding = width * (n + 1)
-                                        - self.docs[doc_index].as_text_doc().rows
+                                        - self.docs[doc_index].as_mut_text_doc().rows
                                             [processing_row - 1 + line_start]
-                                            .line_width(config);
+                                            .line_width(&config);
                                     println!(
                                         "{}{}{}{}",
-                                        self.docs[doc_index].as_text_doc().rows
+                                        self.docs[doc_index].as_mut_text_doc().rows
                                             [processing_row - 1 + line_start]
-                                            .display_buf(config, &self.config.theme),
+                                            .display_buf(&config, &self.config.theme),
                                         crossterm::style::SetBackgroundColor(Color::from(
                                             self.config.theme.background_color
                                         )),
@@ -431,14 +445,14 @@ impl Editor {
                                     drawing_row += n;
                                 } else {
                                     let padding = width
-                                        - self.docs[doc_index].as_text_doc().rows
+                                        - self.docs[doc_index].as_mut_text_doc().rows
                                             [processing_row - 1 + line_start]
-                                            .line_width(config);
+                                            .line_width(&config);
                                     println!(
                                         "{}{}{}{}",
-                                        self.docs[doc_index].as_text_doc().rows
+                                        self.docs[doc_index].as_mut_text_doc().rows
                                             [processing_row - 1 + line_start]
-                                            .display_buf(config, &self.config.theme),
+                                            .display_buf(&config, &self.config.theme),
                                         crossterm::style::SetBackgroundColor(Color::from(
                                             self.config.theme.background_color
                                         )),
@@ -469,17 +483,17 @@ impl Editor {
                     if !self.mouse_event {
                         self.draw_tabs();
                         if is_debug() {
-                            let row = self.docs[doc_index].as_text_doc().cursor_row;
+                            let row = self.docs[doc_index].as_mut_text_doc().cursor_row;
                             let status;
                             {
-                                let doc = self.docs[doc_index].as_text_doc();
+                                let doc = self.docs[doc_index].as_mut_text_doc();
                                 status = format!("Debug:[col:{} tokens:{} i:{} history_count:{}] Line {} of {} {}",doc.cursor_col,doc.rows[row].tokens.len(), doc.history_index.unwrap_or(0),doc.history.len(),doc.cursor_row + 1,lines,self.status_msg);
                             }
                             self.write_status_bar(Some(status));
                         } else {
                             let status;
                             {
-                                let doc = self.docs[doc_index].as_text_doc();
+                                let doc = self.docs[doc_index].as_mut_text_doc();
                                 status = format!(
                                     "Line {} of {} {}",
                                     doc.cursor_row + 1,
@@ -500,7 +514,7 @@ impl Editor {
                             if let Ok(mut command) = self.read_new_filename(Some("j".to_owned())) {
                                 if command.starts_with('j') {
                                     command.drain(..1);
-                                    let doc = self.docs[doc_index].as_text_doc();
+                                    let doc = self.docs[doc_index].as_mut_text_doc();
                                     if let Ok(line) = command.parse::<usize>() {
                                         if line < doc.rows.len() {
                                             doc.line_start = line;
@@ -528,7 +542,7 @@ impl Editor {
 
                     macro_rules! undo_last {
                         () => {{
-                            let doc = self.docs[doc_index].as_text_doc();
+                            let doc = self.docs[doc_index].as_mut_text_doc();
                             if let Some(history_index) = doc.history_index {
                                 if history_index < doc.history.len() {
                                     let action = doc.history[history_index].clone();
@@ -548,7 +562,7 @@ impl Editor {
 
                     macro_rules! redo_last {
                         () => {{
-                            let doc = self.docs[doc_index].as_text_doc();
+                            let doc = self.docs[doc_index].as_mut_text_doc();
                             if let Some(history_index) = doc.history_index {
                                 if history_index + 1 < doc.history.len() {
                                     let action = doc.history[history_index + 1].clone();
@@ -571,7 +585,7 @@ impl Editor {
 
                     macro_rules! copy_selection {
                         () => {{
-                            let doc = self.docs[doc_index].as_text_doc();
+                            let doc = self.docs[doc_index].as_mut_text_doc();
                             if let Some(sel) = doc.selection {
                                 let mut selection_string = String::new();
                                 if sel.start_row == sel.end_row {
@@ -624,7 +638,7 @@ impl Editor {
 
                     macro_rules! paste_clip {
                         () => {{
-                            let doc = self.docs[doc_index].as_text_doc();
+                            let doc = self.docs[doc_index].as_mut_text_doc();
                             let mut ctx: ClipboardContext = ClipboardProvider::new().unwrap();
                             if let Ok(clipboard_contents) = ctx.get_contents() {
                                 let mut i = 0;
@@ -660,14 +674,14 @@ impl Editor {
                     }
 
                     if !self.mouse_event {
-                        let doc = self.docs[doc_index].as_text_doc();
+                        let doc = self.docs[doc_index].as_mut_text_doc();
                         Editor::position_cursor(
                             doc.cursor_row,
                             doc.cursor_col,
                             &doc.rows,
                             width,
                             doc.line_start,
-                            config,
+                            &config,
                         );
                     } else {
                         self.mouse_event = false;
@@ -701,7 +715,7 @@ impl Editor {
                             Key(k) => {
                                 match k.code {
                                     KeyCode::Char(c) => {
-                                        let doc = self.docs[doc_index].as_text_doc();
+                                        let doc = self.docs[doc_index].as_mut_text_doc();
                                         if doc.selection.is_some() {
                                             doc.selection.as_mut().unwrap().normalize();
 
@@ -820,11 +834,14 @@ impl Editor {
 
                                         doc.dirty += 1;
                                         doc.rows[doc.cursor_row].insert_char(doc.cursor_col, c);
+
                                         doc.add_diff(EditDiff::InsertChar(
                                             doc.cursor_col,
                                             doc.cursor_row,
                                             c,
                                         ));
+
+                                        _last_letter = Some(std::time::SystemTime::now());
 
                                         doc.cursor_col += 1;
 
@@ -841,9 +858,14 @@ impl Editor {
                                             doc.to_auto_close = true;
                                         }
                                     }
-                                    KeyCode::Esc => break,
+                                    KeyCode::Esc => {
+                                        if self.show_global_prompt().is_err() {
+                                            break;
+                                        } 
+                                    },
+                                    KeyCode::F(1) => break,
                                     KeyCode::Backspace => {
-                                        let doc = self.docs[doc_index].as_text_doc();
+                                        let doc = self.docs[doc_index].as_mut_text_doc();
                                         if doc.selection.is_some() {
                                             doc.selection.as_mut().unwrap().normalize();
 
@@ -1022,7 +1044,7 @@ impl Editor {
                                         }
                                     }
                                     KeyCode::Delete => {
-                                        let doc = self.docs[doc_index].as_text_doc();
+                                        let doc = self.docs[doc_index].as_mut_text_doc();
                                         if doc.selection.is_some() {
                                             doc.selection.as_mut().unwrap().normalize();
 
@@ -1165,21 +1187,32 @@ impl Editor {
                                         }
                                     }
                                     KeyCode::Tab => {
-                                        let doc = self.docs[doc_index].as_text_doc();
-                                        doc.dirty += 1;
-                                        for c in unescape(&config.tab_str).unwrap().chars() {
-                                            doc.rows[doc.cursor_row].insert_char(doc.cursor_col, c);
-                                            doc.add_diff(EditDiff::InsertChar(
-                                                doc.cursor_col,
-                                                doc.cursor_row,
-                                                c,
-                                            ));
+                                        if k.modifiers.contains(KeyModifiers::SHIFT) {
+                                            if self.open_doc.unwrap() + 1 < num_docs {
+                                                self.open_doc = Some(self.open_doc.unwrap() + 1);
+                                            } else {
+                                                self.open_doc = Some(0);
+                                            }
+                                        }
+                                        else {
+                                            let doc = self.docs[doc_index].as_mut_text_doc();
+                                            doc.dirty += 1;
+                                            let mut diff_vec = Vec::new();
+                                            for c in unescape(&config.tab_str).unwrap().chars() {
+                                                doc.rows[doc.cursor_row].insert_char(doc.cursor_col, c);
+                                                diff_vec.push(EditDiff::InsertChar(
+                                                    doc.cursor_col,
+                                                    doc.cursor_row,
+                                                    c,
+                                                ));
 
-                                            doc.cursor_col += 1;
+                                                doc.cursor_col += 1;
+                                            }
+                                            doc.add_diff(EditDiff::Compound(diff_vec));
                                         }
                                     }
                                     KeyCode::Enter => {
-                                        let doc = self.docs[doc_index].as_text_doc();
+                                        let doc = self.docs[doc_index].as_mut_text_doc();
                                         doc.dirty += 1;
                                         if doc.rows[doc.cursor_row].len() == 0 {
                                             doc.rows.insert(doc.cursor_row + 1, Row::empty());
@@ -1228,12 +1261,12 @@ impl Editor {
                                         }
                                     }
                                     KeyCode::Up => {
-                                        let doc = self.docs[doc_index].as_text_doc();
+                                        let doc = self.docs[doc_index].as_mut_text_doc();
 
                                         let cursor_row = doc.cursor_row;
                                         let cursor_col = doc.cursor_col;
 
-                                        if doc.rows[doc.cursor_row].line_width(config) > width
+                                        if doc.rows[doc.cursor_row].line_width(&config) > width
                                             && doc.cursor_col > width
                                         {
                                             doc.cursor_col -= width;
@@ -1265,12 +1298,12 @@ impl Editor {
                                         }
                                     }
                                     KeyCode::Down => {
-                                        let doc = self.docs[doc_index].as_text_doc();
+                                        let doc = self.docs[doc_index].as_mut_text_doc();
 
                                         let cursor_row = doc.cursor_row;
                                         let cursor_col = doc.cursor_col;
 
-                                        if doc.rows[doc.cursor_row].line_width(config) > width {
+                                        if doc.rows[doc.cursor_row].line_width(&config) > width {
                                             doc.cursor_col += width;
                                             if doc.cursor_col > doc.rows[doc.cursor_row].len() {
                                                 doc.cursor_col = doc.cursor_col % width;
@@ -1303,20 +1336,12 @@ impl Editor {
                                         }
                                     }
                                     KeyCode::Left => {
-                                        let doc = self.docs[doc_index].as_text_doc();
+                                        let doc = self.docs[doc_index].as_mut_text_doc();
 
                                         let cursor_row = doc.cursor_row;
                                         let cursor_col = doc.cursor_col;
 
-                                        if k.modifiers.contains(KeyModifiers::CONTROL)
-                                            && k.modifiers.contains(KeyModifiers::SHIFT)
-                                        {
-                                            if self.open_doc.unwrap() != 0 {
-                                                self.open_doc = Some(self.open_doc.unwrap() - 1);
-                                            } else {
-                                                self.open_doc = Some(num_docs - 1);
-                                            }
-                                        } else if k.modifiers.contains(KeyModifiers::CONTROL) {
+                                        if k.modifiers.contains(KeyModifiers::CONTROL) {
                                             if doc.rows[doc.cursor_row].tokens.len() != 0
                                                 && doc.cursor_col != 0
                                             {
@@ -1330,6 +1355,23 @@ impl Editor {
                                                         last_end = token.end();
                                                     }
                                                 }
+                                            }
+
+                                            if k.modifiers.contains(KeyModifiers::SHIFT) {
+                                                if doc.selection.is_none() {
+                                                    doc.selection = Some(Selection::new(
+                                                        cursor_row,
+                                                        cursor_col,
+                                                        doc.cursor_row,
+                                                        doc.cursor_col,
+                                                    ));
+                                                } else {
+                                                    let selection = doc.selection.as_mut().unwrap();
+    
+                                                    selection.end_row = doc.cursor_row;
+                                                    selection.end_col = doc.cursor_col;
+                                                }
+                                                self.undergoing_selection = true;
                                             }
                                         } else {
                                             if doc.cursor_col != 0 {
@@ -1360,20 +1402,12 @@ impl Editor {
                                         }
                                     }
                                     KeyCode::Right => {
-                                        let doc = self.docs[doc_index].as_text_doc();
+                                        let doc = self.docs[doc_index].as_mut_text_doc();
 
                                         let cursor_row = doc.cursor_row;
                                         let cursor_col = doc.cursor_col;
 
-                                        if k.modifiers.contains(KeyModifiers::CONTROL)
-                                            && k.modifiers.contains(KeyModifiers::SHIFT)
-                                        {
-                                            if self.open_doc.unwrap() + 1 < num_docs {
-                                                self.open_doc = Some(self.open_doc.unwrap() + 1);
-                                            } else {
-                                                self.open_doc = Some(0);
-                                            }
-                                        } else if k.modifiers.contains(KeyModifiers::CONTROL) {
+                                        if k.modifiers.contains(KeyModifiers::CONTROL) {
                                             let mut found_next_token = false;
 
                                             if doc.rows[doc.cursor_row].tokens.len() != 0 {
@@ -1388,6 +1422,23 @@ impl Editor {
 
                                             if !found_next_token {
                                                 doc.cursor_col = doc.rows[doc.cursor_row].len();
+                                            }
+
+                                            if k.modifiers.contains(KeyModifiers::SHIFT) {
+                                                if doc.selection.is_none() {
+                                                    doc.selection = Some(Selection::new(
+                                                        cursor_row,
+                                                        cursor_col,
+                                                        doc.cursor_row,
+                                                        doc.cursor_col,
+                                                    ));
+                                                } else {
+                                                    let selection = doc.selection.as_mut().unwrap();
+    
+                                                    selection.end_row = doc.cursor_row;
+                                                    selection.end_col = doc.cursor_col;
+                                                }
+                                                self.undergoing_selection = true;
                                             }
                                         } else {
                                             doc.cursor_col += 1;
@@ -1419,12 +1470,12 @@ impl Editor {
                                         }
                                     }
                                     KeyCode::Home => {
-                                        self.docs[doc_index].as_text_doc().cursor_col = 0;
+                                        self.docs[doc_index].as_mut_text_doc().cursor_col = 0;
                                     }
                                     KeyCode::End => {
-                                        let row = self.docs[doc_index].as_text_doc().cursor_row;
-                                        self.docs[doc_index].as_text_doc().cursor_col =
-                                            self.docs[doc_index].as_text_doc().rows[row].len();
+                                        let row = self.docs[doc_index].as_mut_text_doc().cursor_row;
+                                        self.docs[doc_index].as_mut_text_doc().cursor_col =
+                                            self.docs[doc_index].as_mut_text_doc().rows[row].len();
                                     }
                                     _ => {}
                                 };
@@ -1435,7 +1486,7 @@ impl Editor {
                                 self.clear = true;
                             }
                             Mouse(e) => {
-                                let doc = self.docs[doc_index].as_text_doc();
+                                let doc = self.docs[doc_index].as_mut_text_doc();
 
                                 self.redraw = false;
                                 self.mouse_event = true;
@@ -1464,7 +1515,7 @@ impl Editor {
                                             &doc.rows,
                                             width,
                                             doc.line_start,
-                                            config,
+                                            &config,
                                         );
                                     } else {
                                         for (i, doc_index) in
@@ -1511,10 +1562,10 @@ impl Editor {
                         }
                     }
 
-                    let doc = self.docs[doc_index].as_text_doc();
+                    let doc = self.docs[doc_index].as_mut_text_doc();
                     let actual_rows = height as i32 - 3;
-                    let diff = doc.visual_rows_to(width, doc.cursor_row, config) as i32
-                        - doc.visual_rows_to(width, doc.line_start, config) as i32;
+                    let diff = doc.visual_rows_to(width, doc.cursor_row, &config) as i32
+                        - doc.visual_rows_to(width, doc.line_start, &config) as i32;
                     if diff >= actual_rows {
                         doc.line_start += 1;
                         self.redraw = true;
@@ -2068,7 +2119,10 @@ impl Editor {
 
         let mut doc_bar = String::new();
 
-        let mut len = 0;
+        doc_bar.push('+');
+        doc_bar.push('─');
+
+        let mut len = 2;
         let mut i = 0;
         for doc in &self.docs {
             if doc_bar.len() + doc.filename().len() + 3 < width {
@@ -2082,7 +2136,7 @@ impl Editor {
                 if let Some(open_doc) = self.open_doc {
                     if open_doc == i {
                         doc_bar.push_str(&format!(
-                            "{}|{}|{}{}{} ",
+                            "{}|{}|{}{}{}─",
                             crossterm::style::Attribute::Reverse,
                             tab_str,
                             crossterm::style::Attribute::Reset,
@@ -2094,10 +2148,11 @@ impl Editor {
                             ))
                         ));
                         i += 1;
+                        len += 1;
                         continue;
                     }
                 }
-                doc_bar.push_str(&format!("|{}| ", tab_str));
+                doc_bar.push_str(&format!("|{}|─", tab_str));
             }
             i += 1;
         }
@@ -2105,12 +2160,12 @@ impl Editor {
         len -= 1;
 
         print!(
-            "{}{}{}{}{}",
+            "{}{}{}{}{}+",
             crossterm::cursor::MoveTo(0, 0),
-            doc_bar.trim(),
+            doc_bar.trim_end(),
             crossterm::style::SetBackgroundColor(Color::from(self.config.theme.background_color)),
             crossterm::style::SetForegroundColor(Color::from(self.config.theme.foreground_color)),
-            " ".repeat(width - len)
+            "─".repeat(width - len - 1)
         );
     }
 
@@ -2120,6 +2175,7 @@ impl Editor {
     ) -> Result<String, Box<dyn Error>> {
         let (width, height) = (self.width(), self.height());
 
+        let mut prefix = String::new();
         let mut filename = if filename_def.is_none() {
             String::new()
         } else {
@@ -2205,16 +2261,33 @@ impl Editor {
                     }
                     else {
                         filename.push(c);
+                        prefix = filename.clone();
+                        file_index = 0;
                     }
                 } else if let KeyCode::Enter = k.code {
                     break;
                 } else if k.code == KeyCode::Esc {
                     return Err("Stopped".into());
                 } else if k.code == KeyCode::Tab {
-                    filename = path_list[file_index].clone();
-                    file_index = (file_index + 1) % path_list.len();
+                    let mut file_list = Vec::new();
+
+                    for file in &path_list {
+                        if file.to_lowercase().starts_with(&prefix.to_lowercase()) {
+                            file_list.push(file);
+                        }
+                    }
+
+                    if file_list.len() == 0 {
+                        continue;
+                    }
+
+                    file_index = file_index % file_list.len();
+
+                    filename = file_list[file_index].clone();
+                    file_index = (file_index + 1) % file_list.len();
                 } else if k.code == KeyCode::Backspace && filename.len() > 0 {
                     filename.remove(filename.len() - 1);
+                    prefix = filename.clone();
                 }
             }
         }
@@ -2222,106 +2295,133 @@ impl Editor {
         Ok(filename)
     }
 
-    pub fn show_prompt(&self, msg: String, ok_msg: String, err_msg: String) -> Result<(), ()> {
+    pub fn show_prompt(&self, title: String, msg: String, ok_msg: String, err_msg: String) -> Result<(), ()> {
         print!("{}", crossterm::cursor::Hide);
 
         let max_len = self.width() / 3 - 2;
-
-        let mut msg_lines = Vec::with_capacity(msg.width() / max_len + 1);
-
-        let mut start = 0;
-        let mut end = std::cmp::min(msg.len(), max_len);
-        loop {
-            msg_lines.push(&msg[start..end]);
-
-            start += end;
-            end += max_len;
-
-            if start >= msg.len() {
-                break;
-            }
-
-            end = std::cmp::min(end, msg.len());
-        }
-
         let len = max_len + 2;
+        let padded_center = pad_center(title, len - 2);
+        let mut selected_left = true;
+        let mut msg_lines = Vec::with_capacity(msg.width() / max_len + 1);
+        
+
+        let mut update_prompt = true;
         let mut offset = 0;
 
-        print!(
-            "{}{}{}+{}+",
-            crossterm::style::SetBackgroundColor(Color::from(self.config.theme.foreground_color)),
-            crossterm::style::SetForegroundColor(Color::from(self.config.theme.background_color)),
-            crossterm::cursor::MoveTo(
-                (self.width() / 2 - len / 2 - 1) as u16,
-                (self.height() / 2) as u16 - 2 + offset
-            ),
-            "=".repeat(len - 2)
-        );
-        offset += 1;
-        print!(
-            "{}|{}|",
-            crossterm::cursor::MoveTo(
-                (self.width() / 2 - len / 2 - 1) as u16,
-                (self.height() / 2) as u16 - 2 + offset
-            ),
-            pad_center("WARNING".to_owned(), len - 2)
-        );
-        offset += 1;
-
-        for m in msg_lines {
-            print!(
-                "{}|{}|",
-                crossterm::cursor::MoveTo(
-                    (self.width() / 2 - len / 2 - 1) as u16,
-                    (self.height() / 2) as u16 - 2 + offset
-                ),
-                pad_center_str(m, len - 2)
-            );
-            offset += 1;
-        }
-
-        print!(
-            "{}|{}|",
-            crossterm::cursor::MoveTo(
-                (self.width() / 2 - len / 2 - 1) as u16,
-                (self.height() / 2) as u16 - 2 + offset
-            ),
-            " ".repeat(len - 2)
-        );
-        offset += 1;
-        print!(
-            "{}|{}|",
-            crossterm::cursor::MoveTo(
-                (self.width() / 2 - len / 2 - 1) as u16,
-                (self.height() / 2) as u16 - 2 + offset
-            ),
-            " ".repeat(len - 2)
-        );
-        offset += 1;
-
-        print!(
-            "{}|{}{}{}|",
-            crossterm::cursor::MoveTo(
-                (self.width() / 2 - len / 2 - 1) as u16,
-                (self.height() / 2) as u16 - 2 + offset
-            ),
-            ok_msg,
-            " ".repeat(len - ok_msg.len() - err_msg.len() - 2),
-            err_msg
-        );
-        offset += 1;
-        print!(
-            "{}+{}+",
-            crossterm::cursor::MoveTo(
-                (self.width() / 2 - len / 2 - 1) as u16,
-                (self.height() / 2) as u16 - 2 + offset
-            ),
-            "=".repeat(len - 2)
-        );
-        std::io::stdout().flush().unwrap();
-        offset -= 1;
-
         loop {
+            if update_prompt {
+                offset = 0;
+                let mut start = 0;
+                let mut end = std::cmp::min(msg.len(), max_len);
+
+                msg_lines.clear();
+
+                loop {
+                    msg_lines.push(&msg[start..end]);
+
+                    start += end;
+                    end += max_len;
+
+                    if start >= msg.len() {
+                        break;
+                    }
+
+                    end = std::cmp::min(end, msg.len());
+                }
+
+
+                print!(
+                    "{}{}{}+{}+",
+                    crossterm::style::SetBackgroundColor(Color::from(self.config.theme.foreground_color)),
+                    crossterm::style::SetForegroundColor(Color::from(self.config.theme.background_color)),
+                    crossterm::cursor::MoveTo(
+                        (self.width() / 2 - len / 2 - 1) as u16,
+                        (self.height() / 2) as u16 - 2 + offset
+                    ),
+                    "=".repeat(len - 2)
+                );
+                offset += 1;
+                print!(
+                    "{}|{}{}{}|",
+                    crossterm::cursor::MoveTo(
+                        (self.width() / 2 - len / 2 - 1) as u16,
+                        (self.height() / 2) as u16 - 2 + offset
+                    ),
+                    crossterm::style::Attribute::Bold, padded_center, crossterm::style::Attribute::NormalIntensity
+                );
+                offset += 1;
+
+                for m in &msg_lines {
+                    print!(
+                        "{}|{}|",
+                        crossterm::cursor::MoveTo(
+                            (self.width() / 2 - len / 2 - 1) as u16,
+                            (self.height() / 2) as u16 - 2 + offset
+                        ),
+                        pad_center_str(m, len - 2)
+                    );
+                    offset += 1;
+                }
+
+                print!(
+                    "{}|{}|",
+                    crossterm::cursor::MoveTo(
+                        (self.width() / 2 - len / 2 - 1) as u16,
+                        (self.height() / 2) as u16 - 2 + offset
+                    ),
+                    " ".repeat(len - 2)
+                );
+                offset += 1;
+                print!(
+                    "{}|{}|",
+                    crossterm::cursor::MoveTo(
+                        (self.width() / 2 - len / 2 - 1) as u16,
+                        (self.height() / 2) as u16 - 2 + offset
+                    ),
+                    " ".repeat(len - 2)
+                );
+                offset += 1;
+
+                if selected_left {
+                    print!(
+                        "{}|{}{}> {}{}{}{}{}|",
+                        crossterm::cursor::MoveTo(
+                            (self.width() / 2 - len / 2 - 1) as u16,
+                            (self.height() / 2) as u16 - 2 + offset
+                        ),
+                        crossterm::style::Attribute::Underlined,crossterm::style::Attribute::Bold ,ok_msg,crossterm::style::Attribute::NoUnderline,crossterm::style::Attribute::NormalIntensity ,
+                        " ".repeat(len - ok_msg.len() - err_msg.len() - 4),
+                        err_msg
+                    );
+                }
+                else {
+                    print!(
+                        "{}|{}{}{}{}> {}{}{}|",
+                        crossterm::cursor::MoveTo(
+                            (self.width() / 2 - len / 2 - 1) as u16,
+                            (self.height() / 2) as u16 - 2 + offset
+                        ),
+                        ok_msg,
+                        " ".repeat(len - ok_msg.len() - err_msg.len() - 4),
+                        crossterm::style::Attribute::Underlined, crossterm::style::Attribute::Bold ,err_msg,crossterm::style::Attribute::NoUnderline, crossterm::style::Attribute::NormalIntensity 
+                    );
+                }
+                
+                offset += 1;
+                print!(
+                    "{}+{}+",
+                    crossterm::cursor::MoveTo(
+                        (self.width() / 2 - len / 2 - 1) as u16,
+                        (self.height() / 2) as u16 - 2 + offset
+                    ),
+                    "=".repeat(len - 2)
+                );
+                std::io::stdout().flush().unwrap();
+                offset -= 1;
+
+                update_prompt = false;
+            }
+
             match read().unwrap() {
                 Mouse(m) => {
                     if let MouseEventKind::Down(button) = m.kind {
@@ -2346,6 +2446,14 @@ impl Editor {
                     if e.code == KeyCode::Esc {
                         return Err(());
                     }
+                    else if e.code == KeyCode::Tab || e.code == KeyCode::Left || e.code == KeyCode::Right {
+                        selected_left = !selected_left;
+                        update_prompt = true;
+                    }
+                    else if e.code == KeyCode::Enter {
+                        print!("{}", crossterm::cursor::Show);
+                        return if selected_left { Ok(()) } else { Err(())};
+                    }
                 }
                 _ => {}
             }
@@ -2364,29 +2472,29 @@ impl Editor {
 
         let (width, height): (usize, usize) = (self.width(), self.height());
 
-        let title_string = format!("Kelp Editor - {}", kelp_version());
-        let by_string = "Written in Rust by Vertex";
+        let title_string = format!("╭╮ Kelp Editor - {} ╭╮", kelp_version());
+        let by_string = "────╯  Written in Rust by Vertex  ╰────";
 
         for y in 0..height {
             if y != 0 && y == height / 2 {
                 println!(
-                    "~{}{}{}",
-                    " ".repeat(width / 2 - 1 - title_string.len() / 2),
+                    " {}{}{}",
+                    " ".repeat(width / 2 - 1 - title_string.width() / 2),
                     title_string,
-                    " ".repeat(width - (width / 2 + 1 + title_string.len() / 2))
+                    " ".repeat(width - (width / 2 + 1 + title_string.width() / 2))
                 );
             } else if y != 0 && y - 1 == height / 2 {
                 println!(
-                    "~{}{}{}",
-                    " ".repeat(width / 2 - 1 - by_string.len() / 2),
+                    " {}{}{}",
+                    " ".repeat(width / 2 - 1 - by_string.width() / 2),
                     by_string,
-                    " ".repeat(width - (width / 2 + 1 + by_string.len() / 2))
+                    " ".repeat(width - (width / 2 + 1 + by_string.width() / 2))
                 );
             } else {
                 if y != height - 1 {
-                    println!("~{}", " ".repeat(width - 1));
+                    println!(" {}", " ".repeat(width - 1));
                 } else {
-                    print!("~{}", " ".repeat(width - 1));
+                    print!(" {}", " ".repeat(width - 1));
                     std::io::stdout().flush()?;
                 }
             }
@@ -2395,5 +2503,320 @@ impl Editor {
         self.write_status_bar(None);
 
         Ok(())
+    }
+
+    fn show_global_prompt(&mut self) -> Result<(), ()> {
+        print!("{}", crossterm::cursor::Hide);
+
+        let mut theme = self.config.theme;
+
+        (theme.background_color, theme.foreground_color) = (theme.foreground_color, theme.background_color);
+
+        let mut redraw = true;
+
+        let mut _scroll_index = 0;
+
+        let prompt_height = (self.height() as f64 * 0.7) as usize;
+        let prompt_width = (self.width() as f64 * 0.7) as usize;
+
+        let mut actions: Vec<(String, Box<dyn Fn(usize, usize) -> String>)> = Vec::new();
+
+        let close_draw = |w, _| {
+            "`".repeat(w)
+        };
+
+        actions.push(("Close".to_owned(), Box::new(close_draw)));
+
+        let mut current_action = 0;
+
+        let mut first_slide_len = 0;
+
+        for (k, _) in &actions {
+            first_slide_len = std::cmp::max(first_slide_len, k.width() + 4);
+        }
+
+        for f in &self.docs {
+            first_slide_len = std::cmp::max(first_slide_len, f.display_name().width() + 4);
+        }
+
+        let action_slide_len = prompt_width - 3 - first_slide_len;
+        let slide_len_unpadded = first_slide_len - 2;
+
+        let action_len = actions.len() + self.docs.len();
+
+        let pad = |s: String, w: usize| -> String {
+            if s.width() > w {
+                let mut ns = String::with_capacity(w);
+                for c in s.chars() {
+                    if ns.width() < w {
+                        ns.push(c);
+                    }
+                    else {
+                        break;
+                    }
+                }
+                ns
+            }
+            else {
+                format!("{: <w$}", s)
+            }
+        };
+
+        let shade = "▓";
+
+        let reset = format!("{}{}{}", crossterm::style::Attribute::Reset, 
+            crossterm::style::SetBackgroundColor(self.config.theme.foreground_color.into()),
+            crossterm::style::SetForegroundColor(self.config.theme.background_color.into())
+        );
+
+        loop {
+            if redraw {
+                let draw_file = |file_index: usize, w: usize, y: usize| -> String {
+                    let extension = (&self.docs[file_index - actions.len()].as_text_doc()).extension();
+
+                    if file_index >= actions.len() {
+                        if file_index - actions.len() < self.docs.len() {
+                            if self.docs[file_index - actions.len()].is_text_doc() {
+                                
+                                if y == 1 {
+                                    pad(self.docs[file_index - actions.len()].display_name(), w)
+                                } else if y == 2 {
+                                    format!("───┬{}", "─".repeat(w - 4))
+                                } else if y >= 3 {
+                                    let line = y - 3;
+
+                                    if line < self.docs[file_index - actions.len()].as_text_doc().rows.len() {
+                                        let config = if self
+                                            .config
+                                            .languages
+                                            .contains_key(&extension)
+                                        {
+                                            self.config.languages
+                                                [&extension].clone()
+                                        } else {
+                                            self.config.languages[&"*".to_owned()].clone()
+                                        };
+
+                                        let row_str = self.docs[file_index - actions.len()].as_text_doc().rows[line].display_buf_upto(&config, &theme, w - 4);
+
+                                        let mut actual_width = self.docs[file_index - actions.len()].as_text_doc().rows[line].buf.width();
+
+                                        let mut res = format!("{: >3}│{}", line + 1, row_str);
+
+                                        res.push_str(&format!("{}{}",
+                                            crossterm::style::SetBackgroundColor(self.config.theme.foreground_color.into()),
+                                            crossterm::style::SetForegroundColor(self.config.theme.background_color.into()))
+                                        );
+
+                                        while actual_width < w - 4 {
+                                            res.push(' ');
+                                            actual_width += 1;
+                                        }
+
+                                        res.push_str(&reset);
+
+                                        res
+                                    }
+                                    else {
+                                        format!("   │{}", " ".repeat(w - 4))
+                                    }
+                                } else {
+                                    " ".repeat(w)
+                                }
+                            }
+                            else {
+                                " ".repeat(w)
+                            }
+                        }
+                        else {
+                            " ".repeat(w)
+                        }
+                    } else {
+                        "`".repeat(w)
+                    }
+                };
+                for y in 0..prompt_height {
+                    if y == 0 {
+                        print!("{} {}{}┌{}┬{}┐{}{}", 
+                                crossterm::cursor::MoveTo(((self.width() - prompt_width) / 2) as u16,((self.height() - prompt_height) / 2 + y) as u16),
+                                crossterm::style::SetBackgroundColor(self.config.theme.foreground_color.into()),
+                                crossterm::style::SetForegroundColor(self.config.theme.background_color.into()),
+                                "─".repeat(first_slide_len),
+                                "─".repeat(prompt_width - 3 - first_slide_len),
+                                crossterm::style::SetBackgroundColor(self.config.theme.background_color.into()),
+                                crossterm::style::SetForegroundColor(self.config.theme.foreground_color.into()),
+                            );
+                    } else if y + 1 == prompt_height {
+                        print!("{}{}{}{shade}└{}┴{}{}┘{}{}", 
+                                crossterm::cursor::MoveTo(((self.width() - prompt_width) / 2) as u16,((self.height() - prompt_height) / 2 + y) as u16),
+                                crossterm::style::SetBackgroundColor(self.config.theme.foreground_color.into()),
+                                crossterm::style::SetForegroundColor(self.config.theme.background_color.into()),
+                                "─".repeat(first_slide_len),
+                                if current_action < actions.len() {
+                                    "────"
+                                } else {
+                                    "───┴"
+                                },
+                                "─".repeat(prompt_width - 7 - first_slide_len),
+                                crossterm::style::SetBackgroundColor(self.config.theme.background_color.into()),
+                                crossterm::style::SetForegroundColor(self.config.theme.foreground_color.into()),
+                            );
+                    } else {
+                        if current_action < actions.len() {
+                            print!("{}{}{}{shade}{}{}{}{}│{}{}", 
+                                    crossterm::cursor::MoveTo(((self.width() - prompt_width) / 2) as u16,((self.height() - prompt_height) / 2 + y) as u16),
+                                    crossterm::style::SetBackgroundColor(self.config.theme.foreground_color.into()),
+                                    crossterm::style::SetForegroundColor(self.config.theme.background_color.into()),
+                                    if y - 1 == actions.len() {
+                                        "├"
+                                    }
+                                    else {
+                                        "│"
+                                    },
+                                    if y - 1 < actions.len() {
+                                        if y - 1 == current_action {
+                                            format!("{}{}> {: <slide_len_unpadded$}{}{}",
+                                                crossterm::style::Attribute::Underlined,
+                                                crossterm::style::Attribute::Bold,
+                                                &actions[y - 1].0,
+                                                crossterm::style::Attribute::NoUnderline,
+                                                crossterm::style::Attribute::NormalIntensity,
+                                            )
+                                        } else {
+                                            format!("  {: <slide_len_unpadded$}",&actions[y - 1].0)
+                                        }
+                                    } else if y - 1 == actions.len() {
+                                        "─".repeat(first_slide_len)
+                                    } else {
+                                        format!("{}{}",
+                                        if current_action == y - 2 {
+                                            "> "
+                                        }
+                                        else {
+                                            "  "
+                                        },
+                                        if y - 2 - actions.len() < self.docs.len() {
+                                            pad(self.docs[y - actions.len() - 2].display_name(), first_slide_len - 2)
+                                        }
+                                        else {
+                                            " ".repeat(first_slide_len - 2)
+                                        })
+                                    },
+                                    if y - 1 == actions.len() {
+                                        "┤"
+                                    }
+                                    else {
+                                        "│"
+                                    },
+                                    (actions[current_action].1)(action_slide_len, y - 1),
+                                    crossterm::style::SetBackgroundColor(self.config.theme.background_color.into()),
+                                    crossterm::style::SetForegroundColor(self.config.theme.foreground_color.into()),
+                                );
+                        }
+                        else {
+                            print!("{}{}{}{shade}│{}{}{}│{}{}", 
+                                    crossterm::cursor::MoveTo(((self.width() - prompt_width) / 2) as u16,((self.height() - prompt_height) / 2 + y) as u16),
+                                    crossterm::style::SetBackgroundColor(self.config.theme.foreground_color.into()),
+                                    crossterm::style::SetForegroundColor(self.config.theme.background_color.into()),
+                                    if y - 1 < actions.len() {
+                                        if y - 1 == current_action {
+                                            format!("{}{}> {: <slide_len_unpadded$}{}{}",
+                                                crossterm::style::Attribute::Underlined,
+                                                crossterm::style::Attribute::Bold,
+                                                &actions[y - 1].0,
+                                                crossterm::style::Attribute::NoUnderline,
+                                                crossterm::style::Attribute::NormalIntensity,
+                                            )
+                                        } else {
+                                            format!("  {: <slide_len_unpadded$}",&actions[y - 1].0)
+                                        }
+                                    } else if y - 1 == actions.len() {
+                                        "─".repeat(first_slide_len)
+                                    } else {
+                                        format!("{}{}",
+                                        if current_action == y - 2 {
+                                            "> "
+                                        }
+                                        else {
+                                            "  "
+                                        },
+                                        if y - 2 - actions.len() < self.docs.len() {
+                                            pad(self.docs[y - actions.len() - 2].display_name(), first_slide_len - 2)
+                                        }
+                                        else {
+                                            " ".repeat(first_slide_len - 2)
+                                        })
+                                    },
+                                    if current_action < actions.len() {
+                                        "│"
+                                    }
+                                    else {
+                                        if y - 1 == actions.len() {
+                                            "┼"
+                                        }
+                                        else {
+                                            "│"
+                                        }
+                                    }//┤
+                                    ,
+                                    draw_file(current_action, prompt_width - 3 - first_slide_len, y),
+                                    crossterm::style::SetBackgroundColor(self.config.theme.background_color.into()),
+                                    crossterm::style::SetForegroundColor(self.config.theme.foreground_color.into()),
+                                );
+                        }
+                    }
+                }
+                print!("{}{}{}{}{}{}",
+                    crossterm::cursor::MoveTo(((self.width() - prompt_width) / 2) as u16,((self.height() + prompt_height) / 2) as u16),
+                    crossterm::style::SetBackgroundColor(self.config.theme.foreground_color.into()),
+                    crossterm::style::SetForegroundColor(self.config.theme.background_color.into()),
+                    shade.repeat(prompt_width),
+                    crossterm::style::SetBackgroundColor(self.config.theme.background_color.into()),
+                    crossterm::style::SetForegroundColor(self.config.theme.foreground_color.into()),
+                );
+
+                _ = stdout().flush();
+
+                redraw = false;
+            }
+
+
+            match read().unwrap() {
+                Key(e) => {
+                    if e.code == KeyCode::Esc {
+                        return Ok(());
+                    }
+                    else if e.code == KeyCode::Down {
+                        current_action = (current_action + 1) % action_len;
+                        redraw = true;
+                    }
+                    else if e.code == KeyCode::Up {
+                        if current_action == 0 {
+                            current_action = action_len - 1;
+                        }
+                        else {
+                            current_action -= 1;
+                            current_action %= action_len;
+                        }
+                        redraw = true;
+                    }
+                    else if e.code == KeyCode::Enter {
+                        if current_action < actions.len() {
+                            if actions[current_action].0 == "Close" {
+                                print!("{}", crossterm::cursor::Show);
+                                return Err(());
+                            }
+                        }
+                        else {
+                            let doc_index = current_action - actions.len();
+                            self.open_doc = Some(doc_index);
+                            print!("{}", crossterm::cursor::Show);
+                            return Ok(());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 }

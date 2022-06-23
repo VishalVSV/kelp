@@ -364,6 +364,7 @@ impl Token {
             handle_odd_token!();
 
             Token::normalize(&mut res, src.len(), config, src.to_string());
+            
             row.tokens = res;
         }
     }
@@ -560,8 +561,7 @@ impl Token {
             Token::Plain(_) => String::new(),
             Token::Comment(_) => {
                 format!(
-                    "{}{}",
-                    crossterm::style::Attribute::Italic,
+                    "{}",
                     crossterm::style::SetForegroundColor(Color::from(*comment))
                 )
             }

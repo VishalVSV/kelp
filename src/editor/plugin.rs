@@ -1,4 +1,4 @@
-use crate::Editor;
+use crate::editor::prelude::Editor;
 use crossterm::event::Event;
 use std::any::Any;
 

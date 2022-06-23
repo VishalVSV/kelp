@@ -1,0 +1,16 @@
+0.4.2
+
+Changelog:
+1. Improved the file selector to work properly with tabbing through files.
+    -> Properly respects typed text as a prefix to search among files
+2. Improved the close file prompt and added keyboard selection (How tf did I not add this before)
+    -> Added > indicators and underlining.
+3. Major document bar changes to prepare for tiling?
+4. Made the tab character changes a single diff so that undoing becomes easier
+5. Selection now works with ctrl+shift+left or right to select entire words.
+
+TODO:
+6. Prompts for everything - Global prompt started (Can only close and navigate files)
+    -> Add a search prompt
+7. Separate language configs into separate folder
+8. Add autocomplete to commands (cd)

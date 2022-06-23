@@ -3,7 +3,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let long_string = "
                         multi line string highlighting!
-                      "
+                      ";
 
     while i <= 10 {
         i += 1;

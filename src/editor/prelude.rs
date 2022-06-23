@@ -13,6 +13,7 @@ use std::path::Path;
 use unescape::unescape;
 use unicode_width::UnicodeWidthStr;
 
+
 use std::io::Write;
 
 #[derive(Default)]
@@ -124,7 +125,7 @@ pub struct EditorConfig {
     pub keybinds: HashMap<String, KelpKeyEvent>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub struct Theme {
     pub background_color: (u8, u8, u8),
     pub foreground_color: (u8, u8, u8),
@@ -218,7 +219,7 @@ impl Row {
         Self {
             buf: String::new(),
             indices: None,
-            tokens: Vec::new(),
+            tokens: Vec::new()
         }
     }
 
@@ -234,7 +235,7 @@ impl Row {
         Self {
             buf: line,
             indices,
-            tokens: Vec::new(),
+            tokens: Vec::new()
         }
     }
 
@@ -262,7 +263,7 @@ impl Row {
     }
 
     #[inline]
-    pub fn display_buf(&mut self, file_config: &FileConfig, theme: &Theme) -> String {
+    pub fn display_buf(&self, file_config: &FileConfig, theme: &Theme) -> String {
         let f_color = crossterm::style::SetForegroundColor(crossterm::style::Color::from(
             theme.foreground_color,
         ));
@@ -285,6 +286,51 @@ impl Row {
                     &self.buf[token.get_range().start..token.get_range().end]
                 );
                 res.push_str(&tmp);
+            }
+
+            res.replace('\t', &file_config.tab_str)
+        }
+    }
+
+    #[inline]
+    pub fn display_buf_upto(&self, file_config: &FileConfig, theme: &Theme, width: usize) -> String {
+        let w = std::cmp::min(width, self.len());
+
+        let f_color = crossterm::style::SetForegroundColor(crossterm::style::Color::from(
+            theme.foreground_color,
+        ));
+        let b_color = crossterm::style::SetBackgroundColor(crossterm::style::Color::from(
+            theme.background_color,
+        ));
+
+        if self.tokens.len() == 0 {
+            self.substring(0, w).to_owned().replace('\t', &file_config.tab_str)
+        } else {
+            let mut res = String::new();
+
+            for token in &self.tokens {
+                let tmp;
+                if token.end() <= w {
+                    tmp = format!(
+                        "{}{}{}{}\x1B[0m",
+                        f_color,
+                        b_color,
+                        token.get_style(file_config),
+                        &self.buf[token.get_range().start..token.get_range().end]
+                    );
+                    res.push_str(&tmp);
+                }
+                else {
+                    tmp = format!(
+                        "{}{}{}{}\x1B[0m",
+                        f_color,
+                        b_color,
+                        token.get_style(file_config),
+                        &self.buf[token.get_range().start..if self.indices.is_some() { self.indices.as_ref().unwrap()[w] } else { w }]
+                    );
+                    res.push_str(&tmp);
+                    break;
+                }
             }
 
             res.replace('\t', &file_config.tab_str)
@@ -447,6 +493,20 @@ impl TextDocument {
         }
     }
 
+    pub fn _add_diff_to_last(&mut self, diff: EditDiff) {
+        if self.history.len() != 0 {
+            if let EditDiff::Compound(a) = self.history.last_mut().unwrap() {
+                a.push(diff);
+            }
+            else {
+                self.add_diff(EditDiff::Compound(vec![diff]));
+            }
+        }
+        else {
+            self.add_diff(EditDiff::Compound(vec![diff]));
+        }
+    }
+
     #[inline]
     pub fn extension(&self) -> String {
         Path::new(&self.filename)
@@ -595,7 +655,14 @@ impl Document {
         }
     }
 
-    pub fn as_text_doc(&mut self) -> &mut TextDocument {
+    pub fn as_mut_text_doc(&mut self) -> &mut TextDocument {
+        match self {
+            Document::TextDocument(doc) => doc,
+            _ => panic!("Document isn't a text document!"),
+        }
+    }
+
+    pub fn as_text_doc(&self) -> &TextDocument {
         match self {
             Document::TextDocument(doc) => doc,
             _ => panic!("Document isn't a text document!"),
